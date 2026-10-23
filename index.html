@@ -9,11 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/auth.css?v=2">
-  <link rel="stylesheet" href="assets/app.css?v=2">
-  <script src="assets/config.js?v=2"></script>
-  <script src="assets/auth.js?v=2" defer></script>
-  <script src="assets/app.js?v=2" defer></script>
+  <link rel="stylesheet" href="assets/auth.css?v=3">
+  <link rel="stylesheet" href="assets/app.css?v=3">
+  <script src="assets/config.js?v=3"></script>
+  <script src="assets/auth.js?v=3" defer></script>
+  <script src="assets/app.js?v=3" defer></script>
 </head>
 <body>
   <!--
@@ -45,11 +45,15 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 16V7.8l-3.6 3.6L6 10l6-6 6 6-1.4 1.4L13 7.8V16Zm-7 4v-5h2v3h12v-3h2v5Z"/></svg>
       <span>Cargar</span>
     </button>
+    <button type="button" data-vista="formularios" data-pa-permiso="verRespuestas" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm0 2v16h10V4Zm2 3h6v2H9Zm0 4h6v2H9Zm0 4h4v2H9Z"/></svg>
+      <span>Formularios</span>
+    </button>
     <button type="button" data-vista="usuarios" data-pa-solo-admin hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-3.3 0-8 1.7-8 5v1h16v-1c0-3.3-4.7-5-8-5Z"/></svg>
       <span>Usuarios</span>
     </button>
-    <button type="button" data-vista="actividad" data-pa-solo-admin hidden>
+    <button type="button" data-vista="actividad" data-pa-permiso="verActividad" hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7Zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8Z"/></svg>
       <span>Actividad</span>
     </button>
@@ -71,6 +75,11 @@
           <option value="">Con y sin nota de voz</option>
           <option value="1">Con nota de voz</option>
           <option value="0">Sin nota de voz</option>
+        </select>
+        <select id="cc-f-oculto" aria-label="Clientes ocultos" data-pa-permiso="ocultarClientes" hidden>
+          <option value="vis">Solo visibles</option>
+          <option value="ocu">Solo ocultos</option>
+          <option value="todos">Visibles y ocultos</option>
         </select>
         <button type="button" id="cc-limpiar" class="pa-enlace">Limpiar</button>
       </div>
@@ -134,13 +143,26 @@
           <li>Pulsa <strong>Sincronizar</strong>. La app revisa cada archivo y lo asocia al cliente cuyo código aparece en el nombre.</li>
           <li>Los audios que no se puedan asociar aparecen abajo para asignarlos a mano.</li>
         </ol>
-        <label class="cc-check"><input id="cc-sinc-reemplazar" type="checkbox"> Reemplazar la nota de voz si el cliente ya tiene una</label>
+        <label class="cc-check" data-pa-permiso="reemplazarAudio" hidden><input id="cc-sinc-reemplazar" type="checkbox"> Reemplazar la nota de voz si el cliente ya tiene una</label>
         <div class="pa-fila"><button type="button" id="cc-sinc" class="pa-btn">Sincronizar ahora</button></div>
         <div id="cc-sinc-zona"></div>
       </div>
     </section>
 
-    <!-- ===================== ACTIVIDAD (admin) ===================== -->
+    <!-- ===================== FORMULARIOS (supervisor y admin) ===================== -->
+    <section id="vista-formularios" class="cc-vista" aria-labelledby="t-formularios" hidden>
+      <h1 id="t-formularios" class="cc-titulo">Formularios</h1>
+      <div class="cc-tarjeta">
+        <div class="cc-tarjeta-cab">
+          <h2>Formularios de preguntas</h2>
+          <button type="button" id="cc-form-nuevo" class="pa-btn pa-btn-sm" data-pa-permiso="disenarFormularios" hidden>+ Nuevo formulario</button>
+        </div>
+        <p class="cc-suave">Los formularios <strong>activos</strong> aparecen en la ficha de cada cliente para llenarlos. Cada respuesta queda guardada en el historial del cliente, con la fecha y el usuario.</p>
+        <div id="cc-form-lista"></div>
+      </div>
+    </section>
+
+    <!-- ===================== ACTIVIDAD (supervisor y admin) ===================== -->
     <section id="vista-actividad" class="cc-vista" aria-labelledby="t-actividad" hidden>
       <h1 id="t-actividad" class="cc-titulo">Actividad</h1>
       <div class="cc-tarjeta">
