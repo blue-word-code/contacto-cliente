@@ -203,3 +203,67 @@ code{font-family:Consolas,"Courier New",monospace;background:var(--pa-fondo);pad
   .cc-tabla-act td:before{content:attr(data-etq);font-size:12px;color:var(--pa-suave);font-weight:600;text-align:left}
 }
 @media (prefers-reduced-motion:reduce){ .cc-esqueleto,.grabando .cc-btn-grabar,.grabando .cc-punto{animation:none} }
+
+/* ---------- Clientes ocultos ---------- */
+.cc-cliente-oculto{background:#f7f7f9;border-style:dashed}
+.cc-cliente-oculto .cc-cliente-txt strong{color:var(--pa-suave)}
+.cc-tag-oculto{display:inline-block;margin-left:6px;padding:0 8px;border-radius:999px;background:#ececf1;color:#4b5563;font-size:11px;font-weight:700;vertical-align:middle;letter-spacing:.02em}
+.cc-banner-oculto{margin:0;padding:10px 12px;border-radius:12px;background:#f3f4f6;border:1px dashed #9ca3af;font-size:14px;color:#374151}
+
+/* ---------- Ficha: formularios e historial ---------- */
+.cc-seccion{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--pa-borde);padding-top:14px}
+.cc-seccion-tit{margin:0;font-size:16px}
+.cc-form-botones{display:flex;flex-wrap:wrap;gap:8px}
+.cc-form-botones:empty{display:none}
+.cc-historial{display:flex;flex-direction:column;gap:8px}
+.cc-hist-item{border:1px solid var(--pa-borde);border-radius:12px;background:#fff;overflow:hidden}
+.cc-hist-item summary{cursor:pointer;padding:10px 12px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;list-style:none;background:var(--pa-fondo)}
+.cc-hist-item summary::-webkit-details-marker{display:none}
+.cc-hist-item summary strong:before{content:'▸ ';color:var(--pa-suave)}
+.cc-hist-item[open] summary strong:before{content:'▾ '}
+.cc-hist-item summary .cc-suave{font-size:13px}
+.cc-hist-item>.pa-fila{padding:0 12px 12px}
+.cc-resp{margin:0;padding:4px 12px 10px}
+.cc-resp div{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;padding:8px 0;border-bottom:1px solid #eef1f6}
+.cc-resp div:last-child{border-bottom:0}
+.cc-resp dt{font-size:13px;color:var(--pa-suave)}
+.cc-resp dd{margin:0;font-weight:500;overflow-wrap:anywhere}
+.cc-pre{white-space:pre-wrap}
+
+/* ---------- Llenar formulario ---------- */
+.cc-pregunta{padding:10px 12px;border:1px solid var(--pa-borde);border-radius:12px;background:#fff}
+.cc-pregunta.cc-falta{border-color:var(--pa-err);background:var(--pa-err-bg)}
+.cc-opciones{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.cc-opcion{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--pa-borde);border-radius:10px;cursor:pointer;background:#fff;font-size:15px}
+.cc-opcion input{width:18px;height:18px;accent-color:var(--pa-azul);flex:none;margin:0}
+.cc-opcion:has(input:checked){border-color:var(--pa-azul-2);background:var(--pa-info-bg)}
+.cc-pastillas{flex-direction:row;flex-wrap:wrap}
+.cc-pastillas .cc-opcion{flex:1;min-width:64px;justify-content:center;font-weight:600}
+.cc-pastillas .cc-opcion input{position:absolute;opacity:0;pointer-events:none}
+.cc-calif .cc-opcion{min-width:48px}
+.cc-opcion:focus-within{outline:3px solid rgba(33,150,243,.35)}
+
+/* ---------- Vista Formularios ---------- */
+.cc-form-lista{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cc-form-item{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--pa-borde);border-radius:12px;background:#fff}
+.cc-form-item.cc-inactivo{background:#f7f7f9}
+.cc-form-info{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 260px}
+.cc-form-info strong{font-size:16px}
+.cc-etiquetas{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.cc-etiquetas .cc-suave{font-size:13px}
+.cc-form-acciones{flex:0 1 auto}
+
+/* Editor de formularios */
+.cc-preguntas{display:flex;flex-direction:column;gap:10px}
+.cc-preg{border:1px solid var(--pa-borde);border-radius:12px;padding:12px;background:var(--pa-fondo);display:flex;flex-direction:column;gap:10px}
+.cc-preg-cab{display:flex;justify-content:space-between;align-items:center}
+.cc-preg-num{font-weight:700;font-size:13px;color:var(--pa-azul-osc);text-transform:uppercase;letter-spacing:.04em}
+.cc-preg-btns{display:flex;gap:2px}
+.cc-preg-btns .pa-btn-icono{min-width:34px;font-size:16px}
+.cc-quitar{color:var(--pa-err)!important}
+.cc-preg-fila{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end}
+.cc-preg-fila .pa-campo{flex:1 1 220px}
+[hidden]{display:none!important} /* lo oculto por rol o permiso nunca se muestra */
+.cc-tabla-resp td{max-width:280px;overflow-wrap:anywhere;vertical-align:top}
+.cc-ver-resp{display:flex;flex-direction:column;gap:10px}
+.cc-ver-resp .pa-input{flex:1;min-width:200px}

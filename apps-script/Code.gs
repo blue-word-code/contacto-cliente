@@ -12,10 +12,15 @@
  *   5. Notas de voz: escuchar, subir, grabar, reemplazar, eliminar,
  *      sincronizar la carpeta de Drive y asociar audios sueltos.
  *   6. Actividad: registro de quién hizo qué y cuándo.
+ *   7. Formularios: el administrador diseña formularios de preguntas; se llenan
+ *      desde la ficha del cliente y cada respuesta queda en su historial.
+ *
+ *  Roles: usuario < editor < supervisor < admin  (ver PERMISOS más abajo).
  *
  *  Datos:
  *   - Hoja de cálculo "Contacto-Cliente — Datos" con las hojas
- *     Usuarios, Clientes y Actividad.
+ *     Usuarios, Clientes, Actividad, Formularios y Respuestas.
+ *   - Las hojas Formularios y Respuestas se crean solas la primera vez que se usan.
  *   - Carpeta de Drive "Contacto-Cliente — Notas de voz" (privada).
  *
  *  Instalación: ver docs/instalacion.md
@@ -61,16 +66,46 @@ const ADMIN_INICIAL = {
 const HOJA_USUARIOS = 'Usuarios';
 const HOJA_CLIENTES = 'Clientes';
 const HOJA_ACTIVIDAD = 'Actividad';
+const HOJA_FORMULARIOS = 'Formularios';
+const HOJA_RESPUESTAS = 'Respuestas';
 
 const COLUMNAS = ['usuario', 'nombre', 'rol', 'activo', 'salt', 'hash',
                   'creado', 'actualizado', 'ultimoAcceso', 'actualizadoPor'];
+// "oculto" va al final para no mover las columnas que ya existen.
 const COL_CLI = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono',
-                 'audioId', 'audioNombre', 'audioFecha', 'audioPor', 'actualizado', 'actualizadoPor'];
+                 'audioId', 'audioNombre', 'audioFecha', 'audioPor', 'actualizado', 'actualizadoPor', 'oculto'];
 const CAMPOS_CLI = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono'];
 const COL_ACT = ['fecha', 'usuario', 'accion', 'detalle'];
+const COL_FORM = ['id', 'titulo', 'descripcion', 'activo', 'unaVez', 'preguntas',
+                  'creado', 'creadoPor', 'actualizado', 'actualizadoPor'];
+const COL_RES = ['id', 'fecha', 'formularioId', 'formulario', 'codigo', 'cliente', 'usuario', 'resumen', 'datos'];
 
-const ROLES = ['usuario', 'editor', 'admin'];
-const NIVEL = { usuario: 0, editor: 1, admin: 2 };
+const ROLES = ['usuario', 'editor', 'supervisor', 'admin'];
+const NIVEL = { usuario: 0, editor: 1, supervisor: 2, admin: 3 };
+
+/*
+ * PERMISOS: rol mínimo para cada acción. Cambia el rol aquí si quieres
+ * dar o quitar un permiso (usuario · editor · supervisor · admin).
+ * La app lee esta misma tabla, así que los botones se ajustan solos.
+ */
+const PERMISOS = {
+  responderFormularios: 'usuario',    // llenar formularios en la ficha del cliente
+  editarClientes: 'editor',           // crear, editar e importar clientes
+  agregarAudio: 'editor',             // grabar / subir nota a clientes que NO tienen nota
+  verHistorialCompleto: 'supervisor', // ver en la ficha las respuestas de todos (los demás ven solo las suyas)
+  verRespuestas: 'supervisor',        // ver y descargar en Excel las respuestas de cada formulario
+  verActividad: 'supervisor',         // menú Actividad
+  reemplazarAudio: 'admin',           // cambiar una nota de voz ya grabada por otra
+  eliminarAudio: 'admin',
+  ocultarClientes: 'admin',           // ocultar / volver a mostrar clientes y ver los ocultos
+  disenarFormularios: 'admin',        // crear, editar, activar y eliminar formularios
+  eliminarRespuestas: 'admin',
+  eliminarClientes: 'admin',
+  gestionarUsuarios: 'admin'
+};
+
+const TIPOS_PREGUNTA = ['texto', 'parrafo', 'numero', 'sino', 'opcion', 'varias', 'fecha', 'calificacion'];
+const CACHE_CLI = 'cli2_'; // prefijo de la lista de clientes en caché
 const EXT_AUDIO = ['mp3', 'm4a', 'mp4', 'aac', 'ogg', 'oga', 'opus', 'wav', 'webm', 'amr', '3gp', 'flac'];
 
 /* ------------------------- INSTALACIÓN ------------------------- */
@@ -113,6 +148,8 @@ function instalar() {
     sc.appendRow(COL_CLI);
     sc.setFrozenRows(1);
     sc.getRange(1, 1, 1, COL_CLI.length).setFontWeight('bold');
+  } else {
+    asegurarTitulosClientes_(sc); // agrega la columna "oculto" en instalaciones anteriores
   }
   // Código y teléfono como texto (conserva ceros a la izquierda)
   sc.getRange(1, COL_CLI.indexOf('codigo') + 1, sc.getMaxRows(), 1).setNumberFormat('@');
@@ -125,6 +162,10 @@ function instalar() {
     sa.setFrozenRows(1);
     sa.getRange(1, 1, 1, COL_ACT.length).setFontWeight('bold');
   }
+
+  // Hojas de formularios y respuestas
+  hojaFormularios_();
+  hojaRespuestas_();
 
   // Usuario admin
   if (!buscarUsuario_(ADMIN_INICIAL.usuario)) {
@@ -237,6 +278,15 @@ const ACCIONES = {
   guardarCliente: guardarCliente_,
   eliminarCliente: eliminarCliente_,
   importarClientes: importarClientes_,
+  ocultarCliente: ocultarCliente_,
+  // Formularios e historial
+  listarFormularios: listarFormularios_,
+  guardarFormulario: guardarFormulario_,
+  eliminarFormulario: eliminarFormulario_,
+  responderFormulario: responderFormulario_,
+  historialCliente: historialCliente_,
+  respuestasFormulario: respuestasFormulario_,
+  eliminarRespuesta: eliminarRespuesta_,
   // Notas de voz
   audio: audio_,
   subirAudio: subirAudio_,
@@ -465,8 +515,11 @@ function restablecerConCodigo_(d) {
 /** Lista completa en formato compacto (una fila = un arreglo). La app busca y filtra en el teléfono. */
 function listarClientes_(d) {
   const u = requerirSesion_(d);
-  const res = { campos: COMPACTO, clientes: clientesCompactos_() };
-  if (NIVEL[u.rol] >= NIVEL.editor) {
+  let lista = clientesCompactos_();
+  const iOculto = COMPACTO.indexOf('oculto');
+  if (!permite_(u, 'ocultarClientes')) lista = lista.filter(function (f) { return !f[iOculto]; });
+  const res = { campos: COMPACTO, clientes: lista };
+  if (permite_(u, 'agregarAudio')) {
     const c = carpeta_(false);
     if (c) res.carpeta = { nombre: c.getName(), url: c.getUrl() };
   }
@@ -476,7 +529,7 @@ function listarClientes_(d) {
 function guardarCliente_(d) {
   const lock = bloquear_();
   try {
-    const u = requerirSesion_(d, 'editor');
+    const u = requerirPermiso_(d, 'editarClientes');
     const datos = limpiarCliente_(d.cliente || {});
     if (!datos.codigo) throw new ErrorApp_('Escribe el código del cliente.');
     if (!/^[A-Z0-9][A-Z0-9 ._\/-]{0,39}$/.test(datos.codigo)) {
@@ -497,7 +550,7 @@ function guardarCliente_(d) {
       registrar_(u.usuario, 'Creó cliente', datos.codigo + ' — ' + datos.nombre);
     } else {
       const idx = t.indice[original];
-      if (idx === undefined) throw new ErrorApp_('El cliente "' + original + '" ya no existe.');
+      if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('El cliente "' + original + '" ya no existe.');
       if (datos.codigo !== original && idxNuevo !== undefined) {
         throw new ErrorApp_('Ya existe otro cliente con el código "' + datos.codigo + '".');
       }
@@ -516,7 +569,7 @@ function guardarCliente_(d) {
 function eliminarCliente_(d) {
   const lock = bloquear_();
   try {
-    const u = requerirSesion_(d, 'admin');
+    const u = requerirPermiso_(d, 'eliminarClientes');
     const codigo = normCodigo_(d.codigo);
     const t = tablaClientes_();
     const idx = t.indice[codigo];
@@ -537,7 +590,7 @@ function eliminarCliente_(d) {
 function importarClientes_(d) {
   const lock = bloquear_();
   try {
-    const u = requerirSesion_(d, 'editor');
+    const u = requerirPermiso_(d, 'editarClientes');
     const filas = Array.isArray(d.filas) ? d.filas : [];
     if (!filas.length) throw new ErrorApp_('No llegaron filas para importar.');
     if (filas.length > CONFIG.MAX_IMPORTAR_POR_LOTE) throw new ErrorApp_('Máximo ' + CONFIG.MAX_IMPORTAR_POR_LOTE + ' filas por envío.');
@@ -593,6 +646,32 @@ function importarClientes_(d) {
   } finally { lock.releaseLock(); }
 }
 
+/**
+ * Oculta o vuelve a mostrar un cliente. Un cliente oculto no aparece en la lista,
+ * la búsqueda ni el resumen de quienes no tienen el permiso "ocultarClientes".
+ * No se borra nada: datos, nota de voz e historial se conservan.
+ */
+function ocultarCliente_(d) {
+  const lock = bloquear_();
+  try {
+    const u = requerirPermiso_(d, 'ocultarClientes');
+    const codigo = normCodigo_(d.codigo);
+    const t = tablaClientes_();
+    const idx = t.indice[codigo];
+    if (idx === undefined) throw new ErrorApp_('El cliente no existe.');
+    asegurarTitulosClientes_(t.hoja);
+    const oculto = d.oculto === true;
+    const fila = t.valores[idx];
+    fila[ci_('oculto')] = oculto ? true : '';
+    fila[ci_('actualizado')] = new Date();
+    fila[ci_('actualizadoPor')] = u.usuario;
+    t.hoja.getRange(idx + 2, 1, 1, COL_CLI.length).setValues([fila]);
+    invalidarClientes_();
+    registrar_(u.usuario, oculto ? 'Ocultó cliente' : 'Mostró cliente', codigo + ' — ' + fila[ci_('nombre')]);
+    return { cliente: compactar_(fila), mensaje: oculto ? 'Cliente oculto.' : 'El cliente vuelve a estar visible.' };
+  } finally { lock.releaseLock(); }
+}
+
 /* =========================================================
  *  MÓDULO 5: NOTAS DE VOZ
  * ========================================================= */
@@ -603,7 +682,7 @@ function audio_(d) {
   const codigo = normCodigo_(d.codigo);
   const t = tablaClientes_();
   const idx = t.indice[codigo];
-  if (idx === undefined) throw new ErrorApp_('El cliente no existe.');
+  if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('El cliente no existe.');
   const fila = t.valores[idx];
   const id = fila[ci_('audioId')];
   if (!id) throw new ErrorApp_('Este cliente no tiene nota de voz.');
@@ -622,7 +701,7 @@ function audio_(d) {
 
 /** Sube (o graba) una nota de voz para un cliente. */
 function subirAudio_(d) {
-  const u = requerirSesion_(d, 'editor');
+  const u = requerirPermiso_(d, 'agregarAudio');
   const codigo = normCodigo_(d.codigo);
   if (!d.base64) throw new ErrorApp_('No llegó el audio.');
   const bytes = Utilities.base64Decode(String(d.base64));
@@ -634,14 +713,14 @@ function subirAudio_(d) {
   try {
     const t = tablaClientes_();
     const idx = t.indice[codigo];
-    if (idx === undefined) throw new ErrorApp_('No existe un cliente con el código "' + codigo + '".');
+    if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('No existe un cliente con el código "' + codigo + '".');
     const fila = t.valores[idx];
     const anterior = fila[ci_('audioId')];
-    if (anterior && !d.reemplazar) throw new ErrorApp_('El cliente ' + codigo + ' ya tiene nota de voz.', 'YA_TIENE');
+    if (anterior) exigirReemplazo_(u, codigo, d.reemplazar);
     const nombreArchivo = codigo.replace(/[\/\\]/g, '-') + '.' + ext;
     const archivo = carpeta_(true).createFile(Utilities.newBlob(bytes, tipoAudio_(nombreArchivo, d.mime), nombreArchivo));
     archivo.setDescription(String(fila[ci_('nombre')] || ''));
-    if (anterior) papelera_(anterior);
+    if (anterior) archivar_(anterior);
     fila[ci_('audioId')] = archivo.getId();
     fila[ci_('audioNombre')] = nombreArchivo;
     fila[ci_('audioFecha')] = new Date();
@@ -649,15 +728,16 @@ function subirAudio_(d) {
     escribirAudio_(t, idx);
     invalidarClientes_();
     registrar_(u.usuario, anterior ? 'Reemplazó nota de voz' : (d.grabado ? 'Grabó nota de voz' : 'Subió nota de voz'),
-               codigo + ' — ' + fila[ci_('nombre')]);
-    return { cliente: compactar_(fila), mensaje: 'Nota de voz guardada.' };
+               codigo + ' — ' + fila[ci_('nombre')] + (d.grabado && anterior ? ' (grabada en la app)' : ''));
+    return { cliente: compactar_(fila),
+             mensaje: anterior ? 'Nota de voz reemplazada. La anterior quedó en la carpeta "Notas reemplazadas".' : 'Nota de voz guardada.' };
   } finally { lock.releaseLock(); }
 }
 
 function eliminarAudio_(d) {
   const lock = bloquear_();
   try {
-    const u = requerirSesion_(d, 'editor');
+    const u = requerirPermiso_(d, 'eliminarAudio');
     const codigo = normCodigo_(d.codigo);
     const t = tablaClientes_();
     const idx = t.indice[codigo];
@@ -678,7 +758,10 @@ function eliminarAudio_(d) {
  * Trabaja por tandas de ~4,5 minutos; si quedan archivos devuelve "continuar" y la app vuelve a llamar.
  */
 function sincronizarAudios_(d) {
-  const u = requerirSesion_(d, 'editor');
+  const u = requerirPermiso_(d, 'agregarAudio');
+  if (d.reemplazar && !permite_(u, 'reemplazarAudio')) {
+    throw new ErrorApp_('Solo un ' + nombreRol_(PERMISOS.reemplazarAudio) + ' puede reemplazar notas de voz que ya existen.');
+  }
   const inicio = Date.now();
   const carpeta = carpeta_(true);
   const it = d.continuar ? DriveApp.continueFileIterator(String(d.continuar)) : carpeta.getFiles();
@@ -720,7 +803,10 @@ function sincronizarAudios_(d) {
         if (idx === undefined) return;
         const fila = t2.valores[idx];
         const c = cambios[codigo];
-        if (fila[ci_('audioId')] && fila[ci_('audioId')] !== c.id && d.reemplazar) papelera_(fila[ci_('audioId')]);
+        if (fila[ci_('audioId')] && fila[ci_('audioId')] !== c.id) {
+          if (!d.reemplazar) return; // alguien le puso nota mientras tanto
+          archivar_(fila[ci_('audioId')]);
+        }
         fila[ci_('audioId')] = c.id;
         fila[ci_('audioNombre')] = c.nombre;
         fila[ci_('audioFecha')] = c.fecha;
@@ -742,19 +828,17 @@ function sincronizarAudios_(d) {
 function asignarAudio_(d) {
   const lock = bloquear_();
   try {
-    const u = requerirSesion_(d, 'editor');
+    const u = requerirPermiso_(d, 'agregarAudio');
     const codigo = normCodigo_(d.codigo);
     const t = tablaClientes_();
     const idx = t.indice[codigo];
-    if (idx === undefined) throw new ErrorApp_('No existe un cliente con el código "' + codigo + '".');
+    if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('No existe un cliente con el código "' + codigo + '".');
     let archivo;
     try { archivo = DriveApp.getFileById(String(d.fileId)); } catch (e) { throw new ErrorApp_('No se encontró el archivo en Drive.'); }
     const fila = t.valores[idx];
     const anterior = fila[ci_('audioId')];
-    if (anterior && anterior !== archivo.getId() && !d.reemplazar) {
-      throw new ErrorApp_('El cliente ' + codigo + ' ya tiene nota de voz.', 'YA_TIENE');
-    }
-    if (anterior && anterior !== archivo.getId()) papelera_(anterior);
+    if (anterior && anterior !== archivo.getId()) exigirReemplazo_(u, codigo, d.reemplazar);
+    if (anterior && anterior !== archivo.getId()) archivar_(anterior);
     fila[ci_('audioId')] = archivo.getId();
     fila[ci_('audioNombre')] = archivo.getName();
     fila[ci_('audioFecha')] = archivo.getDateCreated();
@@ -771,7 +855,7 @@ function asignarAudio_(d) {
  * ========================================================= */
 
 function listarActividad_(d) {
-  requerirSesion_(d, 'admin');
+  requerirPermiso_(d, 'verActividad');
   const sh = hoja_(HOJA_ACTIVIDAD);
   const n = sh.getLastRow() - 1;
   if (n < 1) return { actividad: [], total: 0 };
@@ -789,6 +873,343 @@ function listarActividad_(d) {
   return { actividad: out, total: n };
 }
 
+/* =========================================================
+ *  MÓDULO 7: FORMULARIOS E HISTORIAL DEL CLIENTE
+ * ========================================================= */
+
+/**
+ * Formularios disponibles. Quien diseña formularios recibe todos (activos e inactivos)
+ * y quien ve respuestas recibe además cuántas tiene cada uno; los demás solo los activos.
+ */
+function listarFormularios_(d) {
+  const u = requerirSesion_(d);
+  const disenar = permite_(u, 'disenarFormularios');
+  let lista = leerFormularios_();
+  if (!disenar) lista = lista.filter(function (f) { return f.activo; });
+  if (permite_(u, 'verRespuestas')) {
+    const conteo = {};
+    const sh = hojaRespuestas_();
+    const n = sh.getLastRow() - 1;
+    if (n > 0) {
+      sh.getRange(2, COL_RES.indexOf('formularioId') + 1, n, 1).getValues().forEach(function (f) {
+        conteo[f[0]] = (conteo[f[0]] || 0) + 1;
+      });
+    }
+    lista.forEach(function (f) { f.respuestas = conteo[f.id] || 0; });
+  }
+  return { formularios: lista.map(function (f) { delete f.fila; return f; }) };
+}
+
+/** Crea o actualiza un formulario. Las respuestas ya guardadas no cambian (guardan su propia copia de las preguntas). */
+function guardarFormulario_(d) {
+  const lock = bloquear_();
+  try {
+    const u = requerirPermiso_(d, 'disenarFormularios');
+    const f = d.formulario || {};
+    const titulo = limpiarTexto_(f.titulo, 100);
+    if (!titulo) throw new ErrorApp_('Escribe el título del formulario.');
+    const descripcion = textoLibre_(f.descripcion, 500);
+    const brutas = Array.isArray(f.preguntas) ? f.preguntas : [];
+    if (!brutas.length) throw new ErrorApp_('Agrega al menos una pregunta.');
+    if (brutas.length > 50) throw new ErrorApp_('Máximo 50 preguntas por formulario.');
+    const usados = {};
+    const preguntas = brutas.map(function (p, i) {
+      const texto = textoLibre_(p && p.texto, 200).replace(/\s+/g, ' ');
+      if (!texto) throw new ErrorApp_('La pregunta ' + (i + 1) + ' no tiene texto.');
+      const tipo = TIPOS_PREGUNTA.indexOf(p.tipo) >= 0 ? p.tipo : 'texto';
+      let id = /^[a-z0-9]{4,12}$/.test(String(p.id || '')) ? String(p.id) : nuevoId_('', 6).toLowerCase();
+      while (usados[id]) id = nuevoId_('', 6).toLowerCase();
+      usados[id] = true;
+      const q = { id: id, texto: texto, tipo: tipo, requerida: p.requerida === true };
+      if (tipo === 'opcion' || tipo === 'varias') {
+        const vistas = {};
+        const ops = (Array.isArray(p.opciones) ? p.opciones : String(p.opciones || '').split('\n'))
+          .map(function (o) { return textoLibre_(o, 100).replace(/\s+/g, ' '); })
+          .filter(function (o) { if (!o || vistas[o.toLowerCase()]) return false; vistas[o.toLowerCase()] = true; return true; });
+        if (ops.length < 2) throw new ErrorApp_('La pregunta "' + texto + '" necesita al menos 2 opciones (una por línea).');
+        if (ops.length > 30) throw new ErrorApp_('La pregunta "' + texto + '" tiene más de 30 opciones.');
+        q.opciones = ops;
+      }
+      return q;
+    });
+    const json = JSON.stringify(preguntas);
+    if (json.length > 45000) throw new ErrorApp_('El formulario es demasiado largo.');
+    const sh = hojaFormularios_();
+    const ahora = new Date();
+    const existentes = leerFormularios_();
+    const previo = f.id ? existentes.find(function (x) { return x.id === String(f.id); }) : null;
+    if (f.id && !previo) throw new ErrorApp_('El formulario ya no existe.');
+    const repetido = existentes.find(function (x) { return x.titulo.toLowerCase() === titulo.toLowerCase() && (!previo || x.id !== previo.id); });
+    if (repetido) throw new ErrorApp_('Ya existe un formulario llamado "' + titulo + '".');
+    const activo = f.activo !== false;
+    const unaVez = f.unaVez === true;
+    let id;
+    if (previo) {
+      id = previo.id;
+      sh.getRange(previo.fila, 2, 1, 5).setValues([[titulo, descripcion, activo, unaVez, json]]);
+      sh.getRange(previo.fila, COL_FORM.indexOf('actualizado') + 1, 1, 2).setValues([[ahora, u.usuario]]);
+      registrar_(u.usuario, 'Editó formulario', titulo);
+    } else {
+      id = nuevoId_('F', 8);
+      sh.appendRow([id, titulo, descripcion, activo, unaVez, json, ahora, u.usuario, ahora, u.usuario]);
+      registrar_(u.usuario, 'Creó formulario', titulo + ' (' + preguntas.length + ' preguntas)');
+    }
+    return { formulario: { id: id, titulo: titulo, descripcion: descripcion, activo: activo, unaVez: unaVez,
+                           preguntas: preguntas, actualizado: fecha_(ahora) },
+             mensaje: previo ? 'Formulario actualizado.' : 'Formulario creado.' };
+  } finally { lock.releaseLock(); }
+}
+
+/** Elimina el formulario. Sus respuestas se quedan en el historial de cada cliente. */
+function eliminarFormulario_(d) {
+  const lock = bloquear_();
+  try {
+    const u = requerirPermiso_(d, 'disenarFormularios');
+    const f = leerFormularios_().find(function (x) { return x.id === String(d.id || ''); });
+    if (!f) throw new ErrorApp_('El formulario no existe.');
+    hojaFormularios_().deleteRow(f.fila);
+    registrar_(u.usuario, 'Eliminó formulario', f.titulo);
+    return { mensaje: 'Formulario eliminado. Sus respuestas siguen en el historial de los clientes.' };
+  } finally { lock.releaseLock(); }
+}
+
+/** Guarda las respuestas de un formulario para un cliente (queda en su historial). */
+function responderFormulario_(d) {
+  const lock = bloquear_();
+  try {
+    const u = requerirPermiso_(d, 'responderFormularios');
+    const codigo = normCodigo_(d.codigo);
+    const t = tablaClientes_();
+    const idx = t.indice[codigo];
+    if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('El cliente no existe.');
+    const nombreCliente = String(t.valores[idx][ci_('nombre')] || '');
+    const form = leerFormularios_().find(function (x) { return x.id === String(d.formularioId || ''); });
+    if (!form || !form.activo) throw new ErrorApp_('Este formulario ya no está disponible. Actualiza la página.');
+    if (form.unaVez && respuestasDe_(codigo).some(function (r) { return r.formularioId === form.id; })) {
+      throw new ErrorApp_('Este cliente ya respondió el formulario "' + form.titulo + '" (solo se responde una vez).');
+    }
+    const entrada = d.respuestas || {};
+    const datos = form.preguntas.map(function (q) {
+      const v = validarRespuesta_(q, entrada[q.id]);
+      return { id: q.id, p: q.texto, t: q.tipo, v: v };
+    });
+    if (!datos.some(function (x) { return !vacio_(x.v); })) throw new ErrorApp_('Responde al menos una pregunta.');
+    const json = JSON.stringify(datos);
+    if (json.length > 45000) throw new ErrorApp_('Las respuestas son demasiado largas.');
+    const resumen = datos.filter(function (x) { return !vacio_(x.v); })
+      .map(function (x) { return x.p + ': ' + valorTexto_(x.t, x.v); }).join(' | ');
+    const ahora = new Date();
+    const id = nuevoId_('R', 10);
+    const sh = hojaRespuestas_();
+    const fila = sh.getLastRow() + 1;
+    if (fila > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 500);
+    sh.getRange(fila, COL_RES.indexOf('codigo') + 1).setNumberFormat('@');
+    sh.getRange(fila, 1, 1, COL_RES.length).setValues([[id, ahora, form.id, form.titulo, codigo, nombreCliente,
+      u.usuario, limpiarTexto_(resumen, 45000), json]]);
+    registrar_(u.usuario, 'Llenó formulario', form.titulo + ' — ' + codigo + ' ' + nombreCliente);
+    return { respuesta: { id: id, fecha: fecha_(ahora), formularioId: form.id, formulario: form.titulo,
+                          usuario: u.usuario, respuestas: datos, propia: true },
+             mensaje: 'Respuestas guardadas en el historial del cliente.' };
+  } finally { lock.releaseLock(); }
+}
+
+/** Historial de formularios de un cliente (más reciente primero). */
+function historialCliente_(d) {
+  const u = requerirSesion_(d);
+  const codigo = normCodigo_(d.codigo);
+  const t = tablaClientes_();
+  const idx = t.indice[codigo];
+  if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('El cliente no existe.');
+  const todas = respuestasDe_(codigo);
+  const completo = permite_(u, 'verHistorialCompleto');
+  const respondidos = {};
+  todas.forEach(function (r) { respondidos[r.formularioId] = r.fecha; });
+  const visibles = todas.filter(function (r) { return completo || r.usuario === u.usuario; });
+  visibles.forEach(function (r) { r.propia = r.usuario === u.usuario; });
+  return { historial: visibles, respondidos: respondidos, completo: completo, ocultas: todas.length - visibles.length };
+}
+
+/** Todas las respuestas de un formulario (para ver en pantalla o descargar en Excel). */
+function respuestasFormulario_(d) {
+  const u = requerirPermiso_(d, 'verRespuestas');
+  const id = String(d.id || '');
+  if (!id) throw new ErrorApp_('Falta el formulario.');
+  const sh = hojaRespuestas_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return { respuestas: [] };
+  const col = COL_RES.indexOf('formularioId') + 1;
+  const encontrados = sh.getRange(2, col, n, 1).createTextFinder(id).matchEntireCell(true).findAll();
+  const ocultos = {};
+  if (!permite_(u, 'ocultarClientes')) {
+    tablaClientes_().valores.forEach(function (f) { if (esVerdad_(f[ci_('oculto')])) ocultos[f[0]] = true; });
+  }
+  const lista = leerRespuestas_(sh, encontrados.map(function (r) { return r.getRow(); }))
+    .filter(function (r) { return !ocultos[r.codigo]; })
+    .sort(porRecientes_);
+  lista.forEach(function (r) { delete r._t; delete r._f; });
+  registrar_(u.usuario, 'Consultó respuestas de formulario', (lista[0] && lista[0].formulario) || id);
+  return { respuestas: lista };
+}
+
+function eliminarRespuesta_(d) {
+  const lock = bloquear_();
+  try {
+    const u = requerirPermiso_(d, 'eliminarRespuestas');
+    const sh = hojaRespuestas_();
+    const n = sh.getLastRow() - 1;
+    const r = n > 0 ? sh.getRange(2, 1, n, 1).createTextFinder(String(d.id || '')).matchEntireCell(true).findNext() : null;
+    if (!r || !d.id) throw new ErrorApp_('La respuesta ya no existe.');
+    const datos = leerRespuesta_(sh, r.getRow());
+    sh.deleteRow(r.getRow());
+    registrar_(u.usuario, 'Eliminó respuesta de formulario', (datos ? datos.formulario + ' — ' + datos.codigo : d.id));
+    return { mensaje: 'Respuesta eliminada del historial.' };
+  } finally { lock.releaseLock(); }
+}
+
+/* ---- apoyo de formularios ---- */
+
+function hojaFormularios_() { return asegurarHoja_(HOJA_FORMULARIOS, COL_FORM, []); }
+function hojaRespuestas_() { return asegurarHoja_(HOJA_RESPUESTAS, COL_RES, ['codigo']); }
+
+/** Devuelve la hoja; si no existe la crea con sus títulos (columnas de texto indicadas). */
+function asegurarHoja_(nombre, columnas, deTexto) {
+  const ss = libro_();
+  let sh = ss.getSheetByName(nombre);
+  if (!sh) {
+    sh = ss.insertSheet(nombre);
+    sh.appendRow(columnas);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, columnas.length).setFontWeight('bold');
+    deTexto.forEach(function (c) { sh.getRange(1, columnas.indexOf(c) + 1, sh.getMaxRows(), 1).setNumberFormat('@'); });
+  }
+  return sh;
+}
+
+function leerFormularios_() {
+  const sh = hojaFormularios_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  return sh.getRange(2, 1, n, COL_FORM.length).getValues().map(function (f, i) {
+    let preguntas = [];
+    try { preguntas = JSON.parse(f[5] || '[]'); } catch (e) { preguntas = []; }
+    return { fila: i + 2, id: String(f[0]), titulo: String(f[1] || ''), descripcion: String(f[2] || ''),
+             activo: esVerdad_(f[3]), unaVez: esVerdad_(f[4]), preguntas: preguntas, actualizado: fecha_(f[8]) };
+  }).filter(function (f) { return f.id; });
+}
+
+/** Lee varias filas de Respuestas: pocas, una por una; muchas, en un solo bloque. */
+function leerRespuestas_(sh, filas) {
+  if (!filas.length) return [];
+  if (filas.length <= 8) return filas.map(function (n) { return leerRespuesta_(sh, n); }).filter(Boolean);
+  const min = Math.min.apply(null, filas), max = Math.max.apply(null, filas);
+  const bloque = sh.getRange(min, 1, max - min + 1, COL_RES.length).getValues();
+  return filas.map(function (n) { return convertirRespuesta_(bloque[n - min], n); }).filter(Boolean);
+}
+
+function leerRespuesta_(sh, fila) {
+  return convertirRespuesta_(sh.getRange(fila, 1, 1, COL_RES.length).getValues()[0], fila);
+}
+
+/** Más reciente primero (a igual hora, la fila de más abajo es la más nueva). */
+function porRecientes_(a, b) { return (b._t - a._t) || (b._f - a._f); }
+
+function convertirRespuesta_(f, fila) {
+  if (!f || !f[0]) return null;
+  let datos = [];
+  try { datos = JSON.parse(f[8] || '[]'); } catch (e) { datos = []; }
+  return { id: String(f[0]), fecha: fecha_(f[1]), _t: f[1] instanceof Date ? f[1].getTime() : 0, _f: fila || 0,
+           formularioId: String(f[2]), formulario: String(f[3]), codigo: normCodigo_(f[4]), cliente: String(f[5]),
+           usuario: String(f[6]), respuestas: datos };
+}
+
+/** Respuestas de un cliente, más reciente primero. Usa el buscador de la hoja (rápido aunque haya miles). */
+function respuestasDe_(codigo) {
+  const sh = hojaRespuestas_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1 || !codigo) return [];
+  const col = COL_RES.indexOf('codigo') + 1;
+  const encontrados = sh.getRange(2, col, n, 1).createTextFinder(codigo).matchEntireCell(true).findAll();
+  const lista = leerRespuestas_(sh, encontrados.map(function (r) { return r.getRow(); }))
+    .filter(function (r) { return r.codigo === codigo; })
+    .sort(porRecientes_);
+  lista.forEach(function (r) { delete r._t; delete r._f; });
+  return lista;
+}
+
+function vacio_(v) { return v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length); }
+
+/** Valida y normaliza una respuesta según el tipo de pregunta. */
+function validarRespuesta_(q, v) {
+  let out = '';
+  const falta = function () { return new ErrorApp_('Falta responder: "' + q.texto + '".'); };
+  switch (q.tipo) {
+    case 'parrafo': out = textoLibre_(v, 2000); break;
+    case 'numero': {
+      const s = String(v == null ? '' : v).trim().replace(/\s/g, '').replace(',', '.');
+      if (s) {
+        const num = Number(s);
+        if (!isFinite(num)) throw new ErrorApp_('"' + q.texto + '" debe ser un número.');
+        out = num;
+      }
+      break;
+    }
+    case 'sino': {
+      const s = norm_(v);
+      out = s === 'si' || s === 'sí' ? 'si' : (s === 'no' ? 'no' : '');
+      break;
+    }
+    case 'opcion': {
+      const s = String(v == null ? '' : v);
+      if (s && q.opciones.indexOf(s) < 0) throw new ErrorApp_('Opción no válida en "' + q.texto + '".');
+      out = s;
+      break;
+    }
+    case 'varias': {
+      const arr = Array.isArray(v) ? v.map(String) : [];
+      arr.forEach(function (s) { if (q.opciones.indexOf(s) < 0) throw new ErrorApp_('Opción no válida en "' + q.texto + '".'); });
+      out = q.opciones.filter(function (o) { return arr.indexOf(o) >= 0; });
+      break;
+    }
+    case 'fecha': {
+      const s = String(v == null ? '' : v).trim();
+      if (s && !/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new ErrorApp_('"' + q.texto + '" debe ser una fecha.');
+      out = s;
+      break;
+    }
+    case 'calificacion': {
+      const s = String(v == null ? '' : v).trim();
+      if (s) {
+        const num = Number(s);
+        if ([1, 2, 3, 4, 5].indexOf(num) < 0) throw new ErrorApp_('"' + q.texto + '" debe ser de 1 a 5.');
+        out = num;
+      }
+      break;
+    }
+    default: out = textoLibre_(v, 300).replace(/\s+/g, ' ');
+  }
+  if (q.requerida && vacio_(out)) throw falta();
+  return out;
+}
+
+function valorTexto_(tipo, v) {
+  if (vacio_(v)) return '';
+  if (tipo === 'sino') return v === 'si' ? 'Sí' : 'No';
+  if (tipo === 'varias') return v.join(', ');
+  if (tipo === 'calificacion') return v + '/5';
+  if (tipo === 'fecha') { const p = String(v).split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
+  return String(v);
+}
+
+/** Texto libre: conserva saltos de línea, quita caracteres de control. */
+function textoLibre_(s, max) {
+  return String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '')
+    .replace(/\n{3,}/g, '\n\n').trim().slice(0, max);
+}
+
+function nuevoId_(prefijo, largo) {
+  return prefijo + Utilities.getUuid().replace(/-/g, '').slice(0, largo).toUpperCase();
+}
+
 function registrar_(usuario, accion, detalle) {
   try {
     hoja_(HOJA_ACTIVIDAD).appendRow([new Date(), String(usuario || ''), String(accion || ''),
@@ -800,9 +1221,22 @@ function registrar_(usuario, accion, detalle) {
 
 /* ------------------------- APOYO: CLIENTES ------------------------- */
 
-const COMPACTO = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor'];
+const COMPACTO = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor', 'oculto'];
 
 function ci_(campo) { return COL_CLI.indexOf(campo); }
+
+function esVerdad_(v) { return v === true || String(v).toUpperCase() === 'TRUE' || v === 1 || v === '1'; }
+
+/** Un cliente oculto solo lo ven quienes tienen el permiso "ocultarClientes". */
+function clienteVisible_(u, fila) { return !esVerdad_(fila[ci_('oculto')]) || permite_(u, 'ocultarClientes'); }
+
+/** Pone los títulos de la hoja Clientes (agrega "oculto" si la hoja es de una versión anterior). */
+function asegurarTitulosClientes_(sh) {
+  const actual = sh.getRange(1, 1, 1, COL_CLI.length).getValues()[0];
+  if (actual[COL_CLI.length - 1] !== COL_CLI[COL_CLI.length - 1]) {
+    sh.getRange(1, 1, 1, COL_CLI.length).setValues([COL_CLI]).setFontWeight('bold');
+  }
+}
 
 function normCodigo_(s) { return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toUpperCase(); }
 
@@ -843,16 +1277,17 @@ function tablaClientes_() {
 function compactar_(f) {
   return [String(f[ci_('codigo')]), String(f[ci_('nombre')]), String(f[ci_('direccion')]), String(f[ci_('sector')]),
           String(f[ci_('ruta')]), String(f[ci_('vendedor')]), String(f[ci_('telefono')]),
-          f[ci_('audioId')] ? 1 : 0, fecha_(f[ci_('audioFecha')]), String(f[ci_('audioPor')] || '')];
+          f[ci_('audioId')] ? 1 : 0, fecha_(f[ci_('audioFecha')]), String(f[ci_('audioPor')] || ''),
+          esVerdad_(f[ci_('oculto')]) ? 1 : 0];
 }
 
 /** Lista compacta con caché por trozos (CacheService admite 100 KB por clave). */
 function clientesCompactos_() {
   const c = cache_();
-  const n = Number(c.get('cli_n') || 0);
+  const n = Number(c.get(CACHE_CLI + 'n') || 0);
   if (n > 0) {
     const claves = [];
-    for (let i = 0; i < n; i++) claves.push('cli_' + i);
+    for (let i = 0; i < n; i++) claves.push(CACHE_CLI + i);
     const trozos = c.getAll(claves);
     if (Object.keys(trozos).length === n) {
       try { return JSON.parse(claves.map(function (k) { return trozos[k]; }).join('')); } catch (e) { /* reconstruye */ }
@@ -863,14 +1298,14 @@ function clientesCompactos_() {
   const TAM = 30000; // caracteres por trozo (con margen para acentos en UTF-8)
   const pares = {};
   let k = 0;
-  for (let i = 0; i < texto.length; i += TAM) pares['cli_' + (k++)] = texto.slice(i, i + TAM);
+  for (let i = 0; i < texto.length; i += TAM) pares[CACHE_CLI + (k++)] = texto.slice(i, i + TAM);
   try {
-    if (k <= 900) { c.putAll(pares, 21600); c.put('cli_n', String(k), 21600); }
+    if (k <= 900) { c.putAll(pares, 21600); c.put(CACHE_CLI + 'n', String(k), 21600); }
   } catch (e) { console.error('No se pudo guardar la lista en caché: ' + e); }
   return lista;
 }
 
-function invalidarClientes_() { cache_().remove('cli_n'); }
+function invalidarClientes_() { cache_().remove(CACHE_CLI + 'n'); }
 
 function escribirAudio_(t, idx) {
   const desde = ci_('audioId') + 1;
@@ -901,6 +1336,46 @@ function carpeta_(crear) {
   const nueva = DriveApp.createFolder(CONFIG.NOMBRE_SISTEMA + ' — Notas de voz');
   props.setProperty('CARPETA_ID', nueva.getId());
   return nueva;
+}
+
+/**
+ * Nota reemplazada: en vez de borrarla, se mueve a la subcarpeta "Notas reemplazadas"
+ * (dentro de la carpeta de notas de voz) con la fecha en el nombre, por si hay que recuperarla.
+ */
+function archivar_(id) {
+  try {
+    const f = DriveApp.getFileById(id);
+    const sello = Utilities.formatDate(new Date(), CONFIG.ZONA, 'yyyy-MM-dd HHmm');
+    const nombre = f.getName();
+    const m = nombre.match(/^(.*?)(\.[a-z0-9]{2,5})?$/i);
+    f.setName(m[1] + ' (reemplazada ' + sello + ')' + (m[2] || ''));
+    f.moveTo(carpetaReemplazadas_());
+  } catch (e) {
+    console.error('No se pudo archivar la nota anterior, va a la papelera: ' + e);
+    papelera_(id);
+  }
+}
+
+function carpetaReemplazadas_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('CARPETA_REEMPLAZADAS_ID');
+  if (id) {
+    try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) { /* se busca o crea */ }
+  }
+  const madre = carpeta_(true);
+  const it = madre.getFoldersByName('Notas reemplazadas');
+  const sub = it.hasNext() ? it.next() : madre.createFolder('Notas reemplazadas');
+  props.setProperty('CARPETA_REEMPLAZADAS_ID', sub.getId());
+  return sub;
+}
+
+/** Si el cliente ya tiene nota: pide confirmación (YA_TIENE) y exige el permiso de reemplazo. */
+function exigirReemplazo_(u, codigo, reemplazar) {
+  if (!permite_(u, 'reemplazarAudio')) {
+    throw new ErrorApp_('El cliente ' + codigo + ' ya tiene nota de voz. Solo un ' + nombreRol_(PERMISOS.reemplazarAudio) +
+                        ' puede cambiarla por otra.', 'SIN_PERMISO');
+  }
+  if (!reemplazar) throw new ErrorApp_('El cliente ' + codigo + ' ya tiene nota de voz.', 'YA_TIENE');
 }
 
 function papelera_(id) {
@@ -997,6 +1472,27 @@ function requerirSesion_(d, rolMinimo) {
   }
   c.put('s_' + d.token, raw, segundosSesion_()); // renueva el tiempo
   return u;
+}
+
+/** ¿El usuario tiene este permiso? (ver tabla PERMISOS al inicio). */
+function permite_(u, permiso) {
+  const minimo = PERMISOS[permiso] || 'admin';
+  return (NIVEL[u.rol] || 0) >= NIVEL[minimo];
+}
+
+/** Valida la sesión y el permiso indicado. */
+function requerirPermiso_(d, permiso) {
+  const u = requerirSesion_(d);
+  if (!permite_(u, permiso)) {
+    const minimo = PERMISOS[permiso] || 'admin';
+    throw new ErrorApp_(minimo === 'admin' ? 'Solo un administrador puede hacer esto.'
+                                           : 'Tu usuario no tiene permiso para hacer esto (se necesita rol ' + nombreRol_(minimo) + ' o superior).');
+  }
+  return u;
+}
+
+function nombreRol_(r) {
+  return { usuario: 'usuario', editor: 'editor', supervisor: 'supervisor', admin: 'administrador' }[r] || r;
 }
 
 /* ------------------------- CONTRASEÑAS ------------------------- */
@@ -1164,7 +1660,11 @@ function limpiarTexto_(s, max) {
   return t;
 }
 
-function perfil_(u) { return { usuario: u.usuario, nombre: u.nombre, rol: u.rol }; }
+function perfil_(u) {
+  const permisos = {};
+  Object.keys(PERMISOS).forEach(function (p) { if (permite_(u, p)) permisos[p] = true; });
+  return { usuario: u.usuario, nombre: u.nombre, rol: u.rol, permisos: permisos };
+}
 
 function fecha_(d) {
   return d instanceof Date ? Utilities.formatDate(d, CONFIG.ZONA, 'dd/MM/yyyy HH:mm') : '';

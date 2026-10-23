@@ -199,4 +199,5 @@ select.pa-input{padding-right:8px}
 
 /* Rol editor y selector compacto */
 .pa-tag-editor{background:#e8f6ee;color:#15803d;border-color:#bfe3cc}
+.pa-tag-supervisor{background:#fff4e5;color:#b45309;border-color:#f5d0a0}
 .pa-input-sm{height:34px;font-size:14px;padding:0 8px;width:auto;min-width:140px}

@@ -5,7 +5,10 @@
  * Para el contenido de la app (index.html):
  *   - Los elementos con  data-pa-nombre  muestran el nombre del usuario.
  *   - Los elementos con  data-pa-solo-admin  solo se ven si el usuario es administrador.
- *   - Los elementos con  data-pa-min-rol="editor"  solo se ven para editores y administradores.
+ *   - Los elementos con  data-pa-min-rol="editor"  solo se ven para ese rol o uno superior
+ *     (usuario < editor < supervisor < admin).
+ *   - Los elementos con  data-pa-permiso="verActividad"  solo se ven si el usuario tiene ese permiso
+ *     (la tabla de permisos está en Code.gs → PERMISOS).
  *   - Evento  "pa:sesion"  en document al iniciar sesión (detail = {usuario, nombre, rol}).
  *   - window.PA.api(accion, datos)  llama al backend con la sesión actual.
  */
@@ -16,8 +19,9 @@
   var API_URL = String(CFG.apiUrl || '').trim();
   var SISTEMA = CFG.nombreSistema || 'Contacto-Cliente';
   var LOGO = CFG.logo || 'CC';
-  var NIVEL = { usuario: 0, editor: 1, admin: 2 };
-  var NOMBRE_ROL = { usuario: 'Usuario', editor: 'Editor', admin: 'Administrador' };
+  var NIVEL = { usuario: 0, editor: 1, supervisor: 2, admin: 3 };
+  var ROLES = ['usuario', 'editor', 'supervisor', 'admin'];
+  var NOMBRE_ROL = { usuario: 'Usuario', editor: 'Editor', supervisor: 'Supervisor', admin: 'Administrador' };
   function nombreRol(r) { return NOMBRE_ROL[r] || 'Usuario'; }
   var CLAVE_TOKEN = 'pa_token';
   var LARGO_MIN = 8;
@@ -343,6 +347,9 @@
     [].slice.call(document.querySelectorAll('[data-pa-min-rol]')).forEach(function (el) {
       el.hidden = (NIVEL[u.rol] || 0) < (NIVEL[el.getAttribute('data-pa-min-rol')] || 0);
     });
+    [].slice.call(document.querySelectorAll('[data-pa-permiso]')).forEach(function (el) {
+      el.hidden = !(u.permisos && u.permisos[el.getAttribute('data-pa-permiso')]);
+    });
     document.dispatchEvent(new CustomEvent('pa:sesion', { detail: u }));
   }
 
@@ -492,7 +499,7 @@
           h('td', { 'data-etq': 'Usuario' }, [h('strong', { text: u.usuario }), u.principal ? h('span', { class: 'pa-tag', text: 'principal' }) : null, yo ? h('span', { class: 'pa-tag pa-tag-yo', text: 'tú' }) : null]),
           h('td', { 'data-etq': 'Nombre', text: u.nombre }),
           h('td', { 'data-etq': 'Rol' }, [protegido
-            ? h('span', { class: 'pa-tag ' + (u.rol === 'admin' ? 'pa-tag-admin' : (u.rol === 'editor' ? 'pa-tag-editor' : '')), text: nombreRol(u.rol) })
+            ? h('span', { class: 'pa-tag ' + ({ admin: 'pa-tag-admin', editor: 'pa-tag-editor', supervisor: 'pa-tag-supervisor' }[u.rol] || ''), text: nombreRol(u.rol) })
             : selectorRol(u)]),
           h('td', { 'data-etq': 'Estado' }, [h('span', { class: 'pa-estado ' + (u.activo ? 'pa-on' : 'pa-off'), text: u.activo ? 'Activo' : 'Inactivo' })]),
           h('td', { 'data-etq': 'Último acceso', text: u.ultimoAcceso || '—' }),
@@ -510,8 +517,9 @@
       var nombre = entrada({ type: 'text', placeholder: 'Nombre y apellido', maxlength: '60' });
       var rol = h('select', { class: 'pa-input' }, [
         h('option', { value: 'usuario', text: 'Usuario — busca clientes y escucha notas de voz' }),
-        h('option', { value: 'editor', text: 'Editor — además carga clientes y notas de voz' }),
-        h('option', { value: 'admin', text: 'Administrador — además gestiona usuarios y actividad' })]);
+        h('option', { value: 'editor', text: 'Editor — además carga clientes y graba notas nuevas' }),
+        h('option', { value: 'supervisor', text: 'Supervisor — además ve la actividad y todas las respuestas' }),
+        h('option', { value: 'admin', text: 'Administrador — todo: usuarios, formularios, ocultar clientes, reemplazar notas' })]);
       var clave = campoClave();
       var m2 = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
       var crear = h('button', { type: 'submit', class: 'pa-btn', text: 'Crear usuario' });
@@ -548,7 +556,7 @@
 
     function selectorRol(u) {
       var sel = h('select', { class: 'pa-input pa-input-sm', 'aria-label': 'Rol de ' + u.usuario },
-        ['usuario', 'editor', 'admin'].map(function (r) { return h('option', { value: r, text: nombreRol(r), selected: r === u.rol }); }));
+        ROLES.map(function (r) { return h('option', { value: r, text: nombreRol(r), selected: r === u.rol }); }));
       sel.addEventListener('change', function () {
         sel.disabled = true;
         api('cambiarRol', { usuario: u.usuario, rol: sel.value }).then(function (res) {

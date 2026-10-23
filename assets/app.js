@@ -2,16 +2,17 @@
  * Contacto-Cliente — módulos de la app (después de iniciar sesión)
  *   Clientes · Ficha del cliente con nota de voz · Grabar/Subir audio
  *   Resumen de cobertura · Cargar (Excel, audios, sincronizar Drive) · Actividad
+ *   Formularios de preguntas e historial del cliente · Clientes ocultos
  * Depende de assets/auth.js (window.PA y el evento "pa:sesion").
  */
 (function () {
   'use strict';
 
-  var CAMPOS = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor'];
+  var CAMPOS = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor', 'oculto'];
   var ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', direccion: 'Dirección', sector: 'Sector / Zona', ruta: 'Ruta',
                     vendedor: 'Vendedor / Chofer', telefono: 'Teléfono' };
   var EDITABLES = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono'];
-  var NIVEL = { usuario: 0, editor: 1, admin: 2 };
+  var NIVEL = { usuario: 0, editor: 1, supervisor: 2, admin: 3 };
   var POR_PAGINA = 60;
   var MAX_MB = 10;
   var XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
@@ -24,7 +25,8 @@
     mostrados: POR_PAGINA,
     filtrados: [],
     grupo: 'ruta',
-    cacheAudio: {}      // codigo -> {url, mime}
+    cacheAudio: {},     // codigo -> {url, mime}
+    formularios: []     // formularios disponibles (activos; el admin recibe también los inactivos)
   };
 
   /* ---------------- utilidades ---------------- */
@@ -54,6 +56,9 @@
   function api(accion, datos) { return window.PA.api(accion, datos || {}); }
 
   function puede(rol) { return estado.usuario && (NIVEL[estado.usuario.rol] || 0) >= NIVEL[rol]; }
+
+  /** Permisos que envía el servidor (tabla PERMISOS de Code.gs). */
+  function tiene(permiso) { return !!(estado.usuario && estado.usuario.permisos && estado.usuario.permisos[permiso]); }
 
   function normalizar(s) {
     return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
@@ -154,6 +159,7 @@
     if (location.hash !== '#' + vista) history.replaceState(null, '', '#' + vista);
     if (vista === 'resumen') pintarResumen();
     if (vista === 'actividad') cargarActividad();
+    if (vista === 'formularios') cargarFormularios().then(pintarListaFormularios);
     window.scrollTo(0, 0);
   }
 
@@ -167,6 +173,7 @@
     var c = {};
     CAMPOS.forEach(function (k, i) { c[k] = fila[i]; });
     c.audio = !!c.audio;
+    c.oculto = !!c.oculto;
     c._txt = normalizar([c.codigo, c.nombre, c.direccion, c.sector, c.ruta, c.vendedor].join(' ')) + ' ' +
              String(c.telefono || '').replace(/\D/g, '');
     return c;
@@ -235,12 +242,13 @@
     clearTimeout(temporizador);
     temporizador = setTimeout(function () { filtrar(); }, 120);
   });
-  ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-audio'].forEach(function (id) {
+  ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-audio', 'cc-f-oculto'].forEach(function (id) {
     $(id).addEventListener('change', function () { filtrar(); });
   });
   $('cc-limpiar').addEventListener('click', function () {
     $('cc-buscar').value = '';
     ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-audio'].forEach(function (id) { $(id).value = ''; });
+    $('cc-f-oculto').value = 'vis';
     filtrar();
     $('cc-buscar').focus();
   });
@@ -250,8 +258,11 @@
     var q = normalizar($('cc-buscar').value);
     var terminos = q ? q.split(' ') : [];
     var ruta = $('cc-f-ruta').value, vend = $('cc-f-vendedor').value, sector = $('cc-f-sector').value, aud = $('cc-f-audio').value;
+    var ocu = tiene('ocultarClientes') ? $('cc-f-oculto').value : 'vis';
     var qCodigo = q.toUpperCase();
     estado.filtrados = estado.clientes.filter(function (c) {
+      if (ocu === 'vis' && c.oculto) return false;
+      if (ocu === 'ocu' && !c.oculto) return false;
       if (ruta && c.ruta !== ruta) return false;
       if (vend && c.vendedor !== vend) return false;
       if (sector && c.sector !== sector) return false;
@@ -273,19 +284,21 @@
   function pintarLista() {
     var lista = $('cc-lista'), total = estado.filtrados.length;
     var conAudio = estado.filtrados.reduce(function (n, c) { return n + (c.audio ? 1 : 0); }, 0);
+    var ocultos = tiene('ocultarClientes') ? estado.clientes.reduce(function (n, c) { return n + (c.oculto ? 1 : 0); }, 0) : 0;
     $('cc-conteo').textContent = estado.clientes.length
-      ? miles(total) + (total === 1 ? ' cliente' : ' clientes') + ' · ' + miles(conAudio) + ' con nota de voz'
+      ? miles(total) + (total === 1 ? ' cliente' : ' clientes') + ' · ' + miles(conAudio) + ' con nota de voz' +
+        (ocultos && $('cc-f-oculto').value === 'vis' ? ' · ' + miles(ocultos) + ' ocultos (no se muestran)' : '')
       : 'Todavía no hay clientes cargados.' + (puede('editor') ? ' Usa la sección Cargar para importarlos.' : '');
     lista.innerHTML = '';
     var frag = document.createDocumentFragment();
     estado.filtrados.slice(0, estado.mostrados).forEach(function (c) {
       var info = [c.sector, c.ruta ? 'Ruta ' + c.ruta : '', c.vendedor].filter(Boolean).join(' · ');
       var li = h('li', {}, [
-        h('button', { type: 'button', class: 'cc-cliente', onclick: function () { abrirFicha(c.codigo); } }, [
+        h('button', { type: 'button', class: 'cc-cliente' + (c.oculto ? ' cc-cliente-oculto' : ''), onclick: function () { abrirFicha(c.codigo); } }, [
           h('span', { class: 'cc-estado-audio ' + (c.audio ? 'si' : 'no'), title: c.audio ? 'Tiene nota de voz' : 'Sin nota de voz' },
             [icono(c.audio ? 'play' : 'mic')]),
           h('span', { class: 'cc-cliente-txt' }, [
-            h('strong', { text: c.nombre || '(sin nombre)' }),
+            h('strong', {}, [c.nombre || '(sin nombre)', c.oculto ? h('span', { class: 'cc-tag-oculto', text: 'Oculto' }) : null]),
             h('small', {}, [h('span', { class: 'cc-codigo', text: c.codigo }), info ? ' ' + info : '']),
             c.direccion ? h('small', { class: 'cc-dir', text: c.direccion }) : null
           ])
@@ -312,7 +325,7 @@
     var c = estado.porCodigo[codigo];
     if (!c) return;
     var cuerpo = h('div', { class: 'cc-ficha' });
-    var m = modal(c.nombre || c.codigo, cuerpo, { sub: 'Código ' + c.codigo });
+    var m = modal(c.nombre || c.codigo, cuerpo, { sub: 'Código ' + c.codigo, ancho: true });
     pintarFicha(c, cuerpo, m);
   }
 
@@ -320,6 +333,11 @@
     cuerpo.innerHTML = '';
     m.titulo.textContent = c.nombre || c.codigo;
     var msg = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
+    function redibujar(nuevo) { c = nuevo; pintarFicha(c, cuerpo, m); }
+
+    // Aviso de cliente oculto
+    var banner = c.oculto ? h('p', { class: 'cc-banner-oculto' }, [h('strong', { text: 'Cliente oculto. ' }),
+      'Solo lo ven los administradores; no aparece en la lista, la búsqueda ni el resumen de los demás.']) : null;
 
     // Nota de voz
     var zonaAudio = h('div', { class: 'cc-audio' });
@@ -334,26 +352,34 @@
       } else {
         zonaAudio.appendChild(h('p', { class: 'cc-sin-audio' }, [icono('mic'), 'Este cliente todavía no tiene nota de voz.']));
       }
-      if (puede('editor')) {
-        var acciones = h('div', { class: 'pa-fila' }, [
-          h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', onclick: function () { grabar(c, function (nuevo) { c = nuevo; pintarFicha(c, cuerpo, m); }); } },
-            [icono('mic'), c.audio ? 'Grabar de nuevo' : 'Grabar nota de voz']),
-          h('label', { class: 'pa-btn pa-btn-sec pa-btn-sm cc-label-archivo' }, [icono('subir'), 'Subir archivo',
-            h('input', { type: 'file', accept: 'audio/*,.opus,.ogg,.amr,.m4a', onchange: function (e) {
-              var f = e.target.files[0]; e.target.value = '';
-              if (f) subirUno(c, f, false, msg).then(function (nuevo) { if (nuevo) { c = nuevo; pintarFicha(c, cuerpo, m); } });
-            } })]),
-          c.audio ? h('button', { type: 'button', class: 'pa-btn pa-btn-peligro pa-btn-sm', text: 'Eliminar nota de voz', onclick: function (e) {
-            if (!confirm('¿Eliminar la nota de voz de ' + c.nombre + '? Quedará 30 días en la papelera de Drive.')) return;
-            var b = e.currentTarget; ocupado(b, true, 'Eliminando…');
-            api('eliminarAudio', { codigo: c.codigo }).then(function (res) {
-              ocupado(b, false);
-              if (!res.ok) { mensaje(msg, res.error); return; }
-              c = actualizarLocal(res.cliente); aviso(res.mensaje); pintarFicha(c, cuerpo, m);
-            });
-          } }) : null
-        ]);
-        zonaAudio.appendChild(acciones);
+      // Agregar nota: editores en adelante (si no tiene). Cambiarla por otra: solo quien tiene "reemplazarAudio".
+      var puedeGrabar = c.audio ? tiene('reemplazarAudio') : tiene('agregarAudio');
+      var botones = [];
+      if (puedeGrabar) {
+        botones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', onclick: function () { grabar(c, redibujar); } },
+          [icono('mic'), c.audio ? 'Grabar otra (reemplazar)' : 'Grabar nota de voz']));
+        botones.push(h('label', { class: 'pa-btn pa-btn-sec pa-btn-sm cc-label-archivo' }, [icono('subir'), c.audio ? 'Reemplazar con archivo' : 'Subir archivo',
+          h('input', { type: 'file', accept: 'audio/*,.opus,.ogg,.amr,.m4a', onchange: function (e) {
+            var f = e.target.files[0]; e.target.value = '';
+            if (!f) return;
+            if (c.audio && !confirm('¿Cambiar la nota de voz actual de ' + c.nombre + ' por "' + f.name + '"?\nLa anterior se guarda en la carpeta "Notas reemplazadas" de Drive.')) return;
+            subirUno(c, f, c.audio, msg).then(function (nuevo) { if (nuevo) redibujar(nuevo); });
+          } })]));
+      }
+      if (c.audio && tiene('eliminarAudio')) {
+        botones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-peligro pa-btn-sm', text: 'Eliminar nota de voz', onclick: function (e) {
+          if (!confirm('¿Eliminar la nota de voz de ' + c.nombre + '? Quedará 30 días en la papelera de Drive.')) return;
+          var b = e.currentTarget; ocupado(b, true, 'Eliminando…');
+          api('eliminarAudio', { codigo: c.codigo }).then(function (res) {
+            ocupado(b, false);
+            if (!res.ok) { mensaje(msg, res.error); return; }
+            aviso(res.mensaje); redibujar(actualizarLocal(res.cliente));
+          });
+        } }));
+      }
+      if (botones.length) zonaAudio.appendChild(h('div', { class: 'pa-fila' }, botones));
+      if (c.audio && tiene('agregarAudio') && !tiene('reemplazarAudio')) {
+        zonaAudio.appendChild(h('small', { class: 'cc-suave', text: 'Solo un administrador puede cambiar esta nota de voz por otra.' }));
       }
     }
     pintarAudio();
@@ -374,29 +400,47 @@
       c.direccion ? h('a', { class: 'pa-btn pa-btn-sec', href: 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(consultaMapa), target: '_blank', rel: 'noopener' }, [icono('mapa'), 'Ver en el mapa']) : null
     ]);
 
-    // Administración
-    var admin = null;
-    if (puede('editor')) {
-      admin = h('div', { class: 'pa-fila cc-ficha-admin' }, [
-        h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: 'Editar datos', onclick: function () {
-          formularioCliente(c, function (nuevo) { c = nuevo; pintarFicha(c, cuerpo, m); });
-        } }),
-        puede('admin') ? h('button', { type: 'button', class: 'pa-btn pa-btn-peligro pa-btn-sm', text: 'Eliminar cliente', onclick: function (e) {
-          if (!confirm('¿Eliminar el cliente ' + c.codigo + ' — ' + c.nombre + '?' + (c.audio ? ' Su nota de voz irá a la papelera de Drive.' : '') + ' Esta acción no se puede deshacer.')) return;
-          var b = e.currentTarget; ocupado(b, true, 'Eliminando…');
-          api('eliminarCliente', { codigo: c.codigo }).then(function (res) {
-            ocupado(b, false);
-            if (!res.ok) { mensaje(msg, res.error); return; }
-            quitarLocal(c.codigo); aviso(res.mensaje); m.cerrar();
-          });
-        } }) : null
-      ]);
-    }
+    // Formularios e historial
+    var zonaForms = h('div', { class: 'cc-seccion' });
+    pintarFormulariosFicha(c, zonaForms);
 
+    // Administración
+    var acciones = [];
+    if (tiene('editarClientes')) {
+      acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: 'Editar datos', onclick: function () {
+        formularioCliente(c, redibujar);
+      } }));
+    }
+    if (tiene('ocultarClientes')) {
+      acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: c.oculto ? 'Volver a mostrar cliente' : 'Ocultar cliente', onclick: function (e) {
+        if (!c.oculto && !confirm('¿Ocultar a ' + c.codigo + ' — ' + c.nombre + '?\n\nDejará de aparecer para usuarios, editores y supervisores. No se borra nada (datos, nota de voz e historial se conservan) y puedes volver a mostrarlo cuando quieras.')) return;
+        var b = e.currentTarget; ocupado(b, true, 'Guardando…');
+        api('ocultarCliente', { codigo: c.codigo, oculto: !c.oculto }).then(function (res) {
+          ocupado(b, false);
+          if (!res.ok) { mensaje(msg, res.error); return; }
+          aviso(res.mensaje); redibujar(actualizarLocal(res.cliente));
+        });
+      } }));
+    }
+    if (tiene('eliminarClientes')) {
+      acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-peligro pa-btn-sm', text: 'Eliminar cliente', onclick: function (e) {
+        if (!confirm('¿Eliminar el cliente ' + c.codigo + ' — ' + c.nombre + '?' + (c.audio ? ' Su nota de voz irá a la papelera de Drive.' : '') + ' Esta acción no se puede deshacer.\n\nSi solo quieres que no aparezca, usa "Ocultar cliente".')) return;
+        var b = e.currentTarget; ocupado(b, true, 'Eliminando…');
+        api('eliminarCliente', { codigo: c.codigo }).then(function (res) {
+          ocupado(b, false);
+          if (!res.ok) { mensaje(msg, res.error); return; }
+          quitarLocal(c.codigo); aviso(res.mensaje); m.cerrar();
+        });
+      } }));
+    }
+    var admin = acciones.length ? h('div', { class: 'pa-fila cc-ficha-admin' }, acciones) : null;
+
+    if (banner) cuerpo.appendChild(banner);
     cuerpo.appendChild(zonaAudio);
     cuerpo.appendChild(msg);
     if (contacto.childNodes.length) cuerpo.appendChild(contacto);
     cuerpo.appendChild(datos);
+    cuerpo.appendChild(zonaForms);
     if (admin) cuerpo.appendChild(admin);
   }
 
@@ -440,7 +484,7 @@
       return api('subirAudio', { codigo: c.codigo, nombreArchivo: archivo.name || 'grabacion', mime: archivo.type,
                                  base64: b64, reemplazar: !!reemplazar, grabado: !!grabado });
     }).then(function (res) {
-      if (!res.ok && res.codigo === 'YA_TIENE') {
+      if (!res.ok && res.codigo === 'YA_TIENE' && tiene('reemplazarAudio')) {
         if (confirm('El cliente ya tiene nota de voz. ¿Reemplazarla por la nueva?')) return subirUno(c, archivo, true, msg, grabado);
         if (msg) mensaje(msg, '');
         return null;
@@ -467,13 +511,14 @@
     var punto = h('span', { class: 'cc-punto' });
     var msg = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
     var principal = h('button', { type: 'button', class: 'cc-btn-grabar', 'aria-label': 'Empezar a grabar' }, [icono('mic')]);
-    var ayuda = h('p', { class: 'cc-suave cc-centro', text: 'Pulsa el micrófono y describe cómo llegar al cliente. Máximo 3 minutos.' });
+    var ayuda = h('p', { class: 'cc-suave cc-centro', text: 'Pulsa el micrófono y describe cómo llegar al cliente. Máximo 3 minutos.' +
+      (c.audio ? ' Al guardar, esta grabación reemplaza la nota actual (la anterior se guarda en "Notas reemplazadas").' : '') });
     var vista = h('div', { class: 'cc-vista-previa' });
     var guardar = h('button', { type: 'button', class: 'pa-btn', text: 'Guardar nota de voz', disabled: true });
     var repetir = h('button', { type: 'button', class: 'pa-btn pa-btn-sec', text: 'Grabar de nuevo', hidden: true });
     var cuerpo = h('div', { class: 'cc-grabador' }, [h('div', { class: 'cc-centro' }, [principal, h('div', { class: 'cc-estado-grab' }, [punto, tiempo])]),
       ayuda, vista, msg, h('div', { class: 'pa-fila pa-fin' }, [repetir, guardar])]);
-    var m = modal('Grabar nota de voz', cuerpo, { sub: c.codigo + ' — ' + c.nombre, alCerrar: detenerTodo });
+    var m = modal(c.audio ? 'Reemplazar nota de voz' : 'Grabar nota de voz', cuerpo, { sub: c.codigo + ' — ' + c.nombre, alCerrar: detenerTodo });
 
     function detenerTodo() {
       clearInterval(reloj);
@@ -575,9 +620,11 @@
     var b = e.currentTarget;
     ocupado(b, true, 'Preparando…');
     cargarScript(XLSX_URL).then(function () {
-      var filas = [['Código', 'Nombre', 'Dirección', 'Sector', 'Ruta', 'Vendedor/Chofer', 'Teléfono', 'Nota de voz', 'Fecha nota de voz']];
+      var conOculto = tiene('ocultarClientes');
+      var filas = [['Código', 'Nombre', 'Dirección', 'Sector', 'Ruta', 'Vendedor/Chofer', 'Teléfono', 'Nota de voz', 'Fecha nota de voz'].concat(conOculto ? ['Oculto'] : [])];
       estado.filtrados.forEach(function (c) {
-        filas.push([c.codigo, c.nombre, c.direccion, c.sector, c.ruta, c.vendedor, c.telefono, c.audio ? 'Sí' : 'No', c.audioFecha || '']);
+        filas.push([c.codigo, c.nombre, c.direccion, c.sector, c.ruta, c.vendedor, c.telefono, c.audio ? 'Sí' : 'No', c.audioFecha || '']
+          .concat(conOculto ? [c.oculto ? 'Sí' : 'No'] : []));
       });
       var ws = XLSX.utils.aoa_to_sheet(filas);
       ws['!cols'] = [12, 32, 40, 18, 10, 18, 14, 11, 16].map(function (w) { return { wch: w }; });
@@ -602,8 +649,9 @@
   });
 
   function pintarResumen() {
-    var total = estado.clientes.length;
-    var con = estado.clientes.reduce(function (n, c) { return n + (c.audio ? 1 : 0); }, 0);
+    var visibles = estado.clientes.filter(function (c) { return !c.oculto; }); // los ocultos no cuentan
+    var total = visibles.length;
+    var con = visibles.reduce(function (n, c) { return n + (c.audio ? 1 : 0); }, 0);
     var kpis = $('cc-kpis');
     kpis.innerHTML = '';
     [['Clientes', miles(total), ''], ['Con nota de voz', miles(con), 'ok'], ['Sin nota de voz', miles(total - con), 'pend'],
@@ -611,7 +659,7 @@
       kpis.appendChild(h('div', { class: 'cc-kpi ' + k[2] }, [h('span', { text: k[0] }), h('strong', { text: k[1] })]));
     });
     var grupos = {};
-    estado.clientes.forEach(function (c) {
+    visibles.forEach(function (c) {
       var g = c[estado.grupo] || '(sin ' + (estado.grupo === 'vendedor' ? 'vendedor' : estado.grupo) + ')';
       grupos[g] = grupos[g] || { total: 0, con: 0 };
       grupos[g].total++;
@@ -636,6 +684,7 @@
         var sel = $('cc-f-' + estado.grupo);
         if (grupos[n] && sel.querySelector('option[value="' + CSS.escape(n) + '"]')) sel.value = n;
         $('cc-f-audio').value = '0';
+        $('cc-f-oculto').value = 'vis';
         filtrar();
         irA('clientes');
       }
@@ -821,6 +870,7 @@
     });
     var detectados = filas.filter(function (f) { return f.entrada.value; }).length;
     var reemplazar = h('input', { type: 'checkbox' });
+    var puedeReemplazar = tiene('reemplazarAudio');
     var subir = h('button', { type: 'button', class: 'pa-btn', text: 'Subir ' + filas.length + ' notas de voz' });
     var barra = h('div', { class: 'cc-progreso', hidden: true }, [h('span')]);
     var res = h('p', { class: 'pa-msg' });
@@ -829,7 +879,7 @@
       h('div', { class: 'cc-tabla-cont' }, [h('table', { class: 'pa-tabla cc-tabla' }, [
         h('thead', {}, [h('tr', {}, [h('th', { text: 'Archivo' }), h('th', { class: 'num', text: 'Tamaño' }), h('th', { text: 'Cliente' }), h('th', { text: 'Estado' })])]),
         h('tbody', {}, filas.map(function (f) { return f.tr; }))])]),
-      h('label', { class: 'cc-check' }, [reemplazar, ' Reemplazar la nota de voz si el cliente ya tiene una']),
+      puedeReemplazar ? h('label', { class: 'cc-check' }, [reemplazar, ' Reemplazar la nota de voz si el cliente ya tiene una']) : null,
       barra, res, h('div', { class: 'pa-fila pa-fin' }, [subir])
     ]));
     subir.addEventListener('click', function () {
@@ -848,7 +898,7 @@
           return api('subirAudio', { codigo: c.codigo, nombreArchivo: f.archivo.name, mime: f.archivo.type, base64: b64, reemplazar: reemplazar.checked });
         }).then(function (r) {
           if (r.ok) { actualizarLocal(r.cliente); f.estado.textContent = '✓ Guardada'; f.estado.className = 'cc-estado-celda cc-ok'; ok++; }
-          else if (r.codigo === 'YA_TIENE') { f.estado.textContent = 'Ya tenía nota (no se reemplazó)'; f.estado.className = 'cc-estado-celda cc-suave'; omitidos++; }
+          else if (r.codigo === 'YA_TIENE' || r.codigo === 'SIN_PERMISO') { f.estado.textContent = 'Ya tenía nota (no se reemplazó)'; f.estado.className = 'cc-estado-celda cc-suave'; omitidos++; }
           else { f.estado.textContent = r.error; f.estado.className = 'cc-estado-celda cc-error'; mal++; }
           return siguiente();
         });
@@ -871,7 +921,7 @@
 
   $('cc-sinc').addEventListener('click', function (e) {
     var boton = e.currentTarget, zona = $('cc-sinc-zona');
-    var reemplazar = $('cc-sinc-reemplazar').checked;
+    var reemplazar = tiene('reemplazarAudio') && $('cc-sinc-reemplazar').checked;
     zona.innerHTML = '';
     var progreso = h('p', { class: 'pa-msg pa-msg-info', text: 'Revisando la carpeta… (puede tardar varios minutos con miles de audios; no cierres esta página)' });
     zona.appendChild(progreso);
@@ -893,7 +943,11 @@
         miles(tot.yaAsociados) + ' ya estaban asociados · ' + miles(tot.sinAsociar.length) + ' sin asociar · ' +
         miles(tot.conAudio.length) + ' de clientes que ya tenían nota' + (tot.ignorados ? ' · ' + miles(tot.ignorados) + ' archivos que no son audio' : ''), 'ok');
       pintarSueltos(zona, tot.sinAsociar, 'Audios sin asociar', 'No se encontró ningún código de cliente en el nombre. Escribe el código para asignarlo.', false);
-      pintarSueltos(zona, tot.conAudio, 'Clientes que ya tenían nota de voz', 'Estos audios llevan el código de un cliente que ya tiene nota. Pulsa Reemplazar si el nuevo es el correcto.', true);
+      if (tiene('reemplazarAudio')) {
+        pintarSueltos(zona, tot.conAudio, 'Clientes que ya tenían nota de voz', 'Estos audios llevan el código de un cliente que ya tiene nota. Pulsa Reemplazar si el nuevo es el correcto.', true);
+      } else if (tot.conAudio.length) {
+        zona.appendChild(h('p', { class: 'pa-msg pa-msg-info', text: miles(tot.conAudio.length) + ' audios son de clientes que ya tienen nota de voz. Solo un administrador puede reemplazarlas.' }));
+      }
       cargarClientes();
     }).catch(function (err) {
       ocupado(boton, false);
@@ -933,14 +987,427 @@
     ]));
   }
 
-  /* ---------------- módulo: actividad (admin) ---------------- */
+  /* ---------------- módulo: formularios e historial ---------------- */
+
+  var TIPOS = [
+    ['texto', 'Texto corto'], ['parrafo', 'Párrafo (texto largo)'], ['numero', 'Número'], ['sino', 'Sí / No'],
+    ['opcion', 'Una opción de una lista'], ['varias', 'Varias opciones de una lista'], ['fecha', 'Fecha'], ['calificacion', 'Calificación 1 a 5']
+  ];
+  var NOMBRE_TIPO = {};
+  TIPOS.forEach(function (t) { NOMBRE_TIPO[t[0]] = t[1]; });
+
+  function vacio(v) { return v === '' || v === null || v === undefined || (Array.isArray(v) && !v.length); }
+
+  function formatoValor(tipo, v) {
+    if (vacio(v)) return '—';
+    if (tipo === 'sino') return v === 'si' ? 'Sí' : 'No';
+    if (tipo === 'varias') return v.join(', ');
+    if (tipo === 'calificacion') return '★'.repeat(v) + '☆'.repeat(5 - v) + '  (' + v + '/5)';
+    if (tipo === 'fecha') { var p = String(v).split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
+    if (tipo === 'numero') return Number(v).toLocaleString('es-DO', { maximumFractionDigits: 6 });
+    return String(v);
+  }
+
+  function cargarFormularios() {
+    return api('listarFormularios').then(function (r) {
+      if (r.ok) estado.formularios = r.formularios || [];
+      return r;
+    });
+  }
+
+  function formulariosActivos() { return estado.formularios.filter(function (f) { return f.activo; }); }
+
+  /** Sección de la ficha: botones para llenar formularios + historial de respuestas del cliente. */
+  function pintarFormulariosFicha(c, zona) {
+    zona.innerHTML = '';
+    var botones = h('div', { class: 'cc-form-botones' });
+    var hist = h('div', { class: 'cc-historial' }, [h('div', { class: 'pa-cargando', 'aria-hidden': 'true' })]);
+    var info = h('p', { class: 'cc-suave' });
+    var respondidos = {};
+
+    function pintarBotones() {
+      botones.innerHTML = '';
+      if (!tiene('responderFormularios')) return;
+      var activos = formulariosActivos();
+      if (!activos.length) {
+        botones.appendChild(h('p', { class: 'cc-suave', text: tiene('disenarFormularios')
+          ? 'No hay formularios activos. Créalos en el menú Formularios.' : 'No hay formularios para llenar.' }));
+        return;
+      }
+      activos.forEach(function (f) {
+        var hecho = f.unaVez && respondidos[f.id];
+        botones.appendChild(h('button', { type: 'button', class: 'pa-btn pa-btn-sm ' + (hecho ? 'pa-btn-sec' : ''), disabled: hecho ? true : null,
+          title: hecho ? 'Ya respondido el ' + respondidos[f.id] + ' (se responde una sola vez)' : (f.descripcion || ''),
+          onclick: function () { llenarFormulario(c, f, function () { cargarHistorial(); }); } },
+          [hecho ? '✓ ' + f.titulo : 'Llenar: ' + f.titulo]));
+      });
+    }
+
+    function cargarHistorial() {
+      api('historialCliente', { codigo: c.codigo }).then(function (r) {
+        hist.innerHTML = '';
+        if (!r.ok) { hist.appendChild(h('p', { class: 'pa-msg pa-msg-error', text: r.error })); return; }
+        respondidos = r.respondidos || {};
+        pintarBotones();
+        info.textContent = r.completo ? '' : 'Ves solo las respuestas que registraste tú.' +
+          (r.ocultas ? ' Hay ' + r.ocultas + ' más de otros usuarios (las ven supervisores y administradores).' : '');
+        if (!r.historial.length) { hist.appendChild(h('p', { class: 'pa-vacio', text: 'Todavía no hay respuestas de formularios para este cliente.' })); return; }
+        r.historial.forEach(function (x, i) { hist.appendChild(entradaHistorial(x, i === 0, cargarHistorial)); });
+      });
+    }
+
+    zona.appendChild(h('h3', { class: 'cc-seccion-tit', text: 'Formularios e historial' }));
+    zona.appendChild(botones);
+    zona.appendChild(info);
+    zona.appendChild(hist);
+    pintarBotones();
+    cargarHistorial();
+  }
+
+  function entradaHistorial(x, abierta, alCambiar) {
+    var lista = h('dl', { class: 'cc-resp' });
+    (x.respuestas || []).forEach(function (q) {
+      lista.appendChild(h('div', {}, [h('dt', { text: q.p }), h('dd', { class: q.t === 'parrafo' ? 'cc-pre' : '', text: formatoValor(q.t, q.v) })]));
+    });
+    var pie = null;
+    if (tiene('eliminarRespuestas')) {
+      pie = h('div', { class: 'pa-fila pa-fin' }, [h('button', { type: 'button', class: 'pa-btn pa-btn-peligro pa-btn-sm', text: 'Eliminar respuesta', onclick: function (e) {
+        if (!confirm('¿Eliminar esta respuesta de "' + x.formulario + '" del ' + x.fecha + '? No se puede deshacer.')) return;
+        var b = e.currentTarget; ocupado(b, true, 'Eliminando…');
+        api('eliminarRespuesta', { id: x.id }).then(function (r) {
+          ocupado(b, false);
+          if (!r.ok) { aviso(r.error, 'error'); return; }
+          aviso(r.mensaje); if (alCambiar) alCambiar();
+        });
+      } })]);
+    }
+    return h('details', { class: 'cc-hist-item', open: abierta ? true : null }, [
+      h('summary', {}, [h('strong', { text: x.formulario }), h('span', { class: 'cc-suave', text: x.fecha + ' · ' + x.usuario })]),
+      lista, pie
+    ]);
+  }
+
+  /** Ventana para llenar un formulario de un cliente. */
+  function llenarFormulario(c, f, alGuardar) {
+    var lectores = {};
+    var bloques = f.preguntas.map(function (q, i) {
+      var etq = h('span', { class: 'pa-etq', text: (i + 1) + '. ' + q.texto + (q.requerida ? ' *' : '') });
+      var control, nombre = 'q-' + q.id + '-' + Math.random().toString(36).slice(2, 7);
+      function radios(valores, textos, clase) {
+        return h('div', { class: 'cc-opciones ' + (clase || ''), role: 'radiogroup' }, valores.map(function (v, j) {
+          return h('label', { class: 'cc-opcion' }, [h('input', { type: 'radio', name: nombre, value: String(v) }), h('span', { text: textos[j] })]);
+        }));
+      }
+      function marcado() { var el = control.querySelector('input:checked'); return el ? el.value : ''; }
+      switch (q.tipo) {
+        case 'parrafo':
+          control = h('textarea', { class: 'pa-input cc-textarea', rows: '3', maxlength: '2000' });
+          lectores[q.id] = function () { return control.value.trim(); }; break;
+        case 'numero':
+          control = h('input', { class: 'pa-input', type: 'text', inputmode: 'decimal', maxlength: '20' });
+          lectores[q.id] = function () { return control.value.trim(); }; break;
+        case 'fecha':
+          control = h('input', { class: 'pa-input', type: 'date' });
+          lectores[q.id] = function () { return control.value; }; break;
+        case 'sino':
+          control = radios(['si', 'no'], ['Sí', 'No'], 'cc-pastillas'); lectores[q.id] = marcado; break;
+        case 'calificacion':
+          control = radios([1, 2, 3, 4, 5], ['1', '2', '3', '4', '5'], 'cc-pastillas cc-calif');
+          lectores[q.id] = function () { var v = marcado(); return v ? Number(v) : ''; }; break;
+        case 'opcion':
+          if (q.opciones.length > 8) {
+            control = h('select', { class: 'pa-input' }, [h('option', { value: '', text: '— Elige —' })].concat(q.opciones.map(function (o) { return h('option', { value: o, text: o }); })));
+            lectores[q.id] = function () { return control.value; };
+          } else { control = radios(q.opciones, q.opciones); lectores[q.id] = marcado; }
+          break;
+        case 'varias':
+          control = h('div', { class: 'cc-opciones' }, q.opciones.map(function (o) {
+            return h('label', { class: 'cc-opcion' }, [h('input', { type: 'checkbox', value: o }), h('span', { text: o })]);
+          }));
+          lectores[q.id] = function () { return [].slice.call(control.querySelectorAll('input:checked')).map(function (x) { return x.value; }); };
+          break;
+        default:
+          control = h('input', { class: 'pa-input', type: 'text', maxlength: '300' });
+          lectores[q.id] = function () { return control.value.trim(); };
+      }
+      var envoltura = q.tipo === 'sino' || q.tipo === 'calificacion' || q.tipo === 'varias' || (q.tipo === 'opcion' && q.opciones.length <= 8) ? 'div' : 'label';
+      return h(envoltura, { class: 'pa-campo cc-pregunta', 'data-q': q.id }, [etq, control]);
+    });
+    var msg = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
+    var guardar = h('button', { type: 'submit', class: 'pa-btn', text: 'Guardar respuestas' });
+    var form = h('form', { class: 'pa-form', novalidate: true }, [
+      f.descripcion ? h('p', { class: 'cc-suave cc-pre', text: f.descripcion }) : null
+    ].concat(bloques, [msg, h('div', { class: 'pa-fila pa-fin' }, [guardar])]));
+    var m = modal(f.titulo, form, { sub: c.codigo + ' — ' + c.nombre });
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var respuestas = {}, falta = null, alguna = false;
+      f.preguntas.forEach(function (q) {
+        var v = lectores[q.id]();
+        respuestas[q.id] = v;
+        if (!vacio(v)) alguna = true;
+        if (q.requerida && vacio(v) && !falta) falta = q;
+        if (q.tipo === 'numero' && v && !isFinite(Number(String(v).replace(/\s/g, '').replace(',', '.'))) && !falta) falta = q;
+      });
+      [].slice.call(form.querySelectorAll('.cc-pregunta')).forEach(function (el) { el.classList.toggle('cc-falta', !!falta && el.getAttribute('data-q') === falta.id); });
+      if (falta) { mensaje(msg, (falta.tipo === 'numero' && respuestas[falta.id] ? 'Escribe un número válido en: ' : 'Falta responder: ') + falta.texto); return; }
+      if (!alguna) { mensaje(msg, 'Responde al menos una pregunta.'); return; }
+      ocupado(guardar, true, 'Guardando…');
+      api('responderFormulario', { formularioId: f.id, codigo: c.codigo, respuestas: respuestas }).then(function (r) {
+        ocupado(guardar, false);
+        if (!r.ok) { mensaje(msg, r.error); return; }
+        aviso(r.mensaje); m.cerrar();
+        if (alGuardar) alGuardar(r.respuesta);
+      });
+    });
+    setTimeout(function () { var el = form.querySelector('input,textarea,select'); if (el) el.focus(); }, 50);
+  }
+
+  /* ---- vista Formularios (supervisor: ver respuestas · admin: además diseñar) ---- */
+
+  $('cc-form-nuevo').addEventListener('click', function () { editarFormulario(null); });
+
+  function pintarListaFormularios() {
+    var cont = $('cc-form-lista');
+    cont.innerHTML = '';
+    var lista = estado.formularios;
+    if (!lista.length) {
+      cont.appendChild(h('p', { class: 'pa-vacio', text: tiene('disenarFormularios') ? 'Todavía no hay formularios. Pulsa "+ Nuevo formulario".' : 'Todavía no hay formularios.' }));
+      return;
+    }
+    var ul = h('ul', { class: 'cc-form-lista' });
+    lista.forEach(function (f) {
+      var acciones = [];
+      if (tiene('verRespuestas')) acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sm', text: 'Ver respuestas', onclick: function () { verRespuestas(f); } }));
+      if (tiene('disenarFormularios')) {
+        acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: 'Editar', onclick: function () { editarFormulario(f); } }));
+        acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: f.activo ? 'Desactivar' : 'Activar', onclick: function (e) {
+          var b = e.currentTarget; ocupado(b, true, '…');
+          var copia = JSON.parse(JSON.stringify(f)); copia.activo = !f.activo;
+          api('guardarFormulario', { formulario: copia }).then(function (r) {
+            ocupado(b, false);
+            if (!r.ok) { aviso(r.error, 'error'); return; }
+            aviso(copia.activo ? 'Formulario activado' : 'Formulario desactivado: ya no aparece en las fichas');
+            cargarFormularios().then(pintarListaFormularios);
+          });
+        } }));
+        acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-peligro pa-btn-sm', text: 'Eliminar', onclick: function (e) {
+          if (!confirm('¿Eliminar el formulario "' + f.titulo + '"?\n\nLas ' + miles(f.respuestas || 0) + ' respuestas ya guardadas se conservan en el historial de cada cliente. Si solo quieres que no se siga llenando, usa "Desactivar".')) return;
+          var b = e.currentTarget; ocupado(b, true, '…');
+          api('eliminarFormulario', { id: f.id }).then(function (r) {
+            ocupado(b, false);
+            if (!r.ok) { aviso(r.error, 'error'); return; }
+            aviso(r.mensaje); cargarFormularios().then(pintarListaFormularios);
+          });
+        } }));
+      }
+      ul.appendChild(h('li', { class: 'cc-form-item' + (f.activo ? '' : ' cc-inactivo') }, [
+        h('div', { class: 'cc-form-info' }, [
+          h('strong', { text: f.titulo }),
+          h('div', { class: 'cc-etiquetas' }, [
+            h('span', { class: 'pa-tag ' + (f.activo ? 'pa-tag-editor' : ''), text: f.activo ? 'Activo' : 'Inactivo' }),
+            f.unaVez ? h('span', { class: 'pa-tag', text: 'Una vez por cliente' }) : null,
+            h('span', { class: 'cc-suave', text: f.preguntas.length + (f.preguntas.length === 1 ? ' pregunta' : ' preguntas') +
+              (f.respuestas !== undefined ? ' · ' + miles(f.respuestas) + (f.respuestas === 1 ? ' respuesta' : ' respuestas') : '') + (f.actualizado ? ' · editado ' + f.actualizado : '') })
+          ]),
+          f.descripcion ? h('small', { class: 'cc-suave', text: f.descripcion }) : null
+        ]),
+        h('div', { class: 'pa-fila cc-form-acciones' }, acciones)
+      ]));
+    });
+    cont.appendChild(ul);
+  }
+
+  /** Editor de formularios (crear o modificar). */
+  function editarFormulario(f) {
+    var nuevo = !f;
+    f = f ? JSON.parse(JSON.stringify(f)) : { titulo: '', descripcion: '', activo: true, unaVez: false, preguntas: [] };
+    var titulo = h('input', { class: 'pa-input', type: 'text', maxlength: '100', placeholder: 'Ej.: Visita de supervisión' });
+    titulo.value = f.titulo;
+    var desc = h('textarea', { class: 'pa-input cc-textarea', rows: '2', maxlength: '500', placeholder: 'Instrucciones para quien lo llena (opcional)' });
+    desc.value = f.descripcion || '';
+    var activo = h('input', { type: 'checkbox', checked: f.activo !== false ? true : null });
+    var unaVez = h('input', { type: 'checkbox', checked: f.unaVez ? true : null });
+    var zonaPreg = h('div', { class: 'cc-preguntas' });
+    var filas = [];
+
+    function filaPregunta(q) {
+      q = q || { texto: '', tipo: 'texto', requerida: false, opciones: [] };
+      var texto = h('input', { class: 'pa-input', type: 'text', maxlength: '200', placeholder: 'Escribe la pregunta' });
+      texto.value = q.texto || '';
+      var tipo = h('select', { class: 'pa-input' }, TIPOS.map(function (t) { return h('option', { value: t[0], text: t[1] }); }));
+      tipo.value = q.tipo || 'texto';
+      var req = h('input', { type: 'checkbox', checked: q.requerida ? true : null });
+      var ops = h('textarea', { class: 'pa-input cc-textarea', rows: '3', placeholder: 'Una opción por línea' });
+      ops.value = (q.opciones || []).join('\n');
+      var campoOps = h('label', { class: 'pa-campo' }, [h('span', { class: 'pa-etq', text: 'Opciones (una por línea)' }), ops]);
+      function verOps() { campoOps.hidden = ['opcion', 'varias'].indexOf(tipo.value) < 0; }
+      tipo.addEventListener('change', verOps); verOps();
+      var num = h('span', { class: 'cc-preg-num' });
+      var fila = { q: q, el: null };
+      function mover(d) {
+        var i = filas.indexOf(fila), j = i + d;
+        if (j < 0 || j >= filas.length) return;
+        filas.splice(i, 1); filas.splice(j, 0, fila); repintar();
+      }
+      fila.el = h('div', { class: 'cc-preg' }, [
+        h('div', { class: 'cc-preg-cab' }, [num,
+          h('div', { class: 'cc-preg-btns' }, [
+            h('button', { type: 'button', class: 'pa-btn-icono', title: 'Subir', 'aria-label': 'Subir pregunta', text: '↑', onclick: function () { mover(-1); } }),
+            h('button', { type: 'button', class: 'pa-btn-icono', title: 'Bajar', 'aria-label': 'Bajar pregunta', text: '↓', onclick: function () { mover(1); } }),
+            h('button', { type: 'button', class: 'pa-btn-icono cc-quitar', title: 'Quitar', 'aria-label': 'Quitar pregunta', text: '✕', onclick: function () {
+              if (texto.value.trim() && !confirm('¿Quitar la pregunta "' + texto.value.trim() + '"?')) return;
+              filas.splice(filas.indexOf(fila), 1); repintar();
+            } })
+          ])]),
+        h('label', { class: 'pa-campo' }, [h('span', { class: 'pa-etq', text: 'Pregunta' }), texto]),
+        h('div', { class: 'cc-preg-fila' }, [
+          h('label', { class: 'pa-campo' }, [h('span', { class: 'pa-etq', text: 'Tipo de respuesta' }), tipo]),
+          h('label', { class: 'cc-check' }, [req, ' Obligatoria'])
+        ]),
+        campoOps
+      ]);
+      fila.num = num;
+      fila.leer = function () {
+        return { id: q.id, texto: texto.value.trim(), tipo: tipo.value, requerida: req.checked,
+                 opciones: ops.value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean) };
+      };
+      fila.enfocar = function () { texto.focus(); };
+      return fila;
+    }
+    function repintar() {
+      zonaPreg.innerHTML = '';
+      filas.forEach(function (fl, i) { fl.num.textContent = 'Pregunta ' + (i + 1); zonaPreg.appendChild(fl.el); });
+      if (!filas.length) zonaPreg.appendChild(h('p', { class: 'cc-suave', text: 'Agrega la primera pregunta.' }));
+    }
+    f.preguntas.forEach(function (q) { filas.push(filaPregunta(q)); });
+    if (!filas.length) filas.push(filaPregunta());
+    repintar();
+
+    var agregar = h('button', { type: 'button', class: 'pa-btn pa-btn-sec', text: '+ Agregar pregunta', onclick: function () {
+      var fl = filaPregunta(); filas.push(fl); repintar(); fl.enfocar();
+    } });
+    var msg = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
+    var guardar = h('button', { type: 'submit', class: 'pa-btn', text: nuevo ? 'Crear formulario' : 'Guardar cambios' });
+    var form = h('form', { class: 'pa-form', novalidate: true }, [
+      h('label', { class: 'pa-campo' }, [h('span', { class: 'pa-etq', text: 'Título *' }), titulo]),
+      h('label', { class: 'pa-campo' }, [h('span', { class: 'pa-etq', text: 'Descripción' }), desc]),
+      h('div', { class: 'cc-preg-fila' }, [
+        h('label', { class: 'cc-check' }, [activo, ' Activo (aparece en las fichas para llenarlo)']),
+        h('label', { class: 'cc-check' }, [unaVez, ' Cada cliente lo responde una sola vez'])
+      ]),
+      !nuevo && f.respuestas ? h('p', { class: 'pa-msg pa-msg-info', text: 'Este formulario ya tiene ' + miles(f.respuestas) + ' respuestas. Si cambias las preguntas, las respuestas anteriores no cambian: cada una conserva las preguntas tal como estaban.' }) : null,
+      h('h3', { class: 'cc-seccion-tit', text: 'Preguntas' }),
+      zonaPreg, h('div', {}, [agregar]),
+      msg, h('div', { class: 'pa-fila pa-fin' }, [guardar])
+    ]);
+    var m = modal(nuevo ? 'Nuevo formulario' : 'Editar formulario', form, { ancho: true });
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var preguntas = filas.map(function (fl) { return fl.leer(); });
+      var err = !titulo.value.trim() ? 'Escribe el título del formulario.' : (!preguntas.length ? 'Agrega al menos una pregunta.' : '');
+      preguntas.forEach(function (q, i) {
+        if (err) return;
+        if (!q.texto) err = 'La pregunta ' + (i + 1) + ' no tiene texto.';
+        else if ((q.tipo === 'opcion' || q.tipo === 'varias') && q.opciones.length < 2) err = 'La pregunta ' + (i + 1) + ' necesita al menos 2 opciones (una por línea).';
+      });
+      if (err) { mensaje(msg, err); return; }
+      ocupado(guardar, true, 'Guardando…');
+      api('guardarFormulario', { formulario: { id: nuevo ? '' : f.id, titulo: titulo.value.trim(), descripcion: desc.value.trim(),
+        activo: activo.checked, unaVez: unaVez.checked, preguntas: preguntas } }).then(function (r) {
+        ocupado(guardar, false);
+        if (!r.ok) { mensaje(msg, r.error); return; }
+        aviso(r.mensaje); m.cerrar();
+        cargarFormularios().then(pintarListaFormularios);
+      });
+    });
+    setTimeout(function () { titulo.focus(); }, 50);
+  }
+
+  /** Tabla con todas las respuestas de un formulario + descarga a Excel. */
+  function verRespuestas(f) {
+    var cont = h('div', { class: 'cc-ver-resp' }, [h('div', { class: 'pa-cargando', 'aria-hidden': 'true' })]);
+    modal('Respuestas: ' + f.titulo, cont, { ancho: true });
+    api('respuestasFormulario', { id: f.id }).then(function (r) {
+      cont.innerHTML = '';
+      if (!r.ok) { cont.appendChild(h('p', { class: 'pa-msg pa-msg-error', text: r.error })); return; }
+      var lista = r.respuestas;
+      if (!lista.length) { cont.appendChild(h('p', { class: 'pa-vacio', text: 'Todavía nadie ha llenado este formulario.' })); return; }
+      // Columnas: preguntas actuales en orden y luego las que ya no existen (de respuestas viejas).
+      var cols = [], porId = {};
+      function agregarCol(id, texto, tipo) { if (porId[id]) return; porId[id] = { id: id, texto: texto, tipo: tipo }; cols.push(porId[id]); }
+      f.preguntas.forEach(function (q) { agregarCol(q.id, q.texto, q.tipo); });
+      lista.forEach(function (x) { (x.respuestas || []).forEach(function (q) { agregarCol(q.id, q.p, q.t); }); });
+      function valor(x, col) {
+        var q = (x.respuestas || []).filter(function (a) { return a.id === col.id; })[0];
+        return q ? formatoValor(q.t, q.v) : '';
+      }
+      var buscar = h('input', { class: 'pa-input', type: 'search', placeholder: 'Filtrar por cliente, código, usuario o respuesta…' });
+      var excel = h('button', { type: 'button', class: 'pa-btn pa-btn-sec', text: 'Descargar Excel' });
+      var info = h('p', { class: 'cc-suave' });
+      var tablaCont = h('div', { class: 'cc-tabla-cont' });
+      function filtradas() {
+        var q = normalizar(buscar.value);
+        if (!q) return lista;
+        return lista.filter(function (x) {
+          return normalizar([x.fecha, x.codigo, x.cliente, x.usuario].concat(cols.map(function (c) { return valor(x, c); })).join(' ')).indexOf(q) >= 0;
+        });
+      }
+      function pintar() {
+        var filas = filtradas();
+        info.textContent = miles(filas.length) + ' de ' + miles(lista.length) + ' respuestas' + (filas.length > 300 ? ' · se muestran las 300 más recientes (el Excel trae todas)' : '');
+        tablaCont.innerHTML = '';
+        tablaCont.appendChild(h('table', { class: 'pa-tabla cc-tabla cc-tabla-resp' }, [
+          h('thead', {}, [h('tr', {}, ['Fecha', 'Código', 'Cliente', 'Usuario'].concat(cols.map(function (c) { return c.texto; })).map(function (t) { return h('th', { text: t }); }))]),
+          h('tbody', {}, filas.slice(0, 300).map(function (x) {
+            var tr = h('tr', { class: estado.porCodigo[x.codigo] ? 'cc-fila-clic' : '', title: estado.porCodigo[x.codigo] ? 'Abrir la ficha del cliente' : '' },
+              [h('td', { 'data-etq': 'Fecha', text: x.fecha }), h('td', { 'data-etq': 'Código' }, [h('span', { class: 'cc-codigo', text: x.codigo })]),
+               h('td', { 'data-etq': 'Cliente', text: x.cliente }), h('td', { 'data-etq': 'Usuario', text: x.usuario })]
+                .concat(cols.map(function (c) { return h('td', { 'data-etq': c.texto, text: valor(x, c) }); })));
+            if (estado.porCodigo[x.codigo]) tr.addEventListener('click', function () { abrirFicha(x.codigo); });
+            return tr;
+          }))
+        ]));
+      }
+      var temp = null;
+      buscar.addEventListener('input', function () { clearTimeout(temp); temp = setTimeout(pintar, 200); });
+      excel.addEventListener('click', function () {
+        ocupado(excel, true, 'Preparando…');
+        cargarScript(XLSX_URL).then(function () {
+          var aoa = [['Fecha', 'Código', 'Cliente', 'Ruta', 'Vendedor/Chofer', 'Usuario'].concat(cols.map(function (c) { return c.texto; }))];
+          filtradas().forEach(function (x) {
+            var cli = estado.porCodigo[x.codigo] || {};
+            aoa.push([x.fecha, x.codigo, x.cliente, cli.ruta || '', cli.vendedor || '', x.usuario].concat(cols.map(function (c) {
+              var q = (x.respuestas || []).filter(function (a) { return a.id === c.id; })[0];
+              if (!q || vacio(q.v)) return '';
+              if (q.t === 'numero' || q.t === 'calificacion') return Number(q.v);
+              return formatoValor(q.t, q.v);
+            })));
+          });
+          var ws = XLSX.utils.aoa_to_sheet(aoa);
+          ws['!cols'] = aoa[0].map(function (t, i) { return { wch: i < 6 ? [16, 12, 30, 10, 18, 14][i] : Math.min(40, Math.max(12, String(t).length)) }; });
+          var wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Respuestas');
+          var nombre = normalizar(f.titulo).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'formulario';
+          XLSX.writeFile(wb, 'respuestas-' + nombre + '-' + new Date().toISOString().slice(0, 10) + '.xlsx');
+          ocupado(excel, false);
+        }).catch(function () { ocupado(excel, false); aviso('No se pudo preparar el Excel. Revisa tu conexión.', 'error'); });
+      });
+      cont.appendChild(h('div', { class: 'pa-fila pa-entre' }, [buscar, excel]));
+      cont.appendChild(info);
+      cont.appendChild(tablaCont);
+      pintar();
+    });
+  }
+
+  /* ---------------- módulo: actividad (supervisor y admin) ---------------- */
 
   var tempAct = null;
   $('cc-act-filtro').addEventListener('input', function () { clearTimeout(tempAct); tempAct = setTimeout(cargarActividad, 400); });
   $('cc-act-actualizar').addEventListener('click', cargarActividad);
 
   function cargarActividad() {
-    if (!puede('admin')) return;
+    if (!tiene('verActividad')) return;
     var cont = $('cc-act-tabla');
     cont.innerHTML = '';
     cont.appendChild(h('div', { class: 'pa-cargando', 'aria-hidden': 'true' }));
@@ -964,8 +1431,10 @@
   document.addEventListener('pa:sesion', function (e) {
     estado.usuario = e.detail;
     estado.cacheAudio = {};
+    $('cc-f-oculto').value = 'vis';
     var vista = (location.hash || '#clientes').slice(1);
     irA(vista === 'usuarios' ? 'clientes' : vista);
     cargarClientes();
+    cargarFormularios();
   });
 })();
