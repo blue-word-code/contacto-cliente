@@ -9,11 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/auth.css?v=3">
-  <link rel="stylesheet" href="assets/app.css?v=3">
-  <script src="assets/config.js?v=3"></script>
-  <script src="assets/auth.js?v=3" defer></script>
-  <script src="assets/app.js?v=3" defer></script>
+  <link rel="stylesheet" href="assets/auth.css?v=5">
+  <link rel="stylesheet" href="assets/app.css?v=5">
+  <script src="assets/config.js?v=5"></script>
+  <script src="assets/auth.js?v=5" defer></script>
+  <script src="assets/app.js?v=5" defer></script>
 </head>
 <body>
   <!--
@@ -45,7 +45,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 16V7.8l-3.6 3.6L6 10l6-6 6 6-1.4 1.4L13 7.8V16Zm-7 4v-5h2v3h12v-3h2v5Z"/></svg>
       <span>Cargar</span>
     </button>
-    <button type="button" data-vista="formularios" data-pa-permiso="verRespuestas" hidden>
+    <button type="button" data-vista="formularios" data-pa-permiso="responderFormularios" hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm0 2v16h10V4Zm2 3h6v2H9Zm0 4h6v2H9Zm0 4h4v2H9Z"/></svg>
       <span>Formularios</span>
     </button>
@@ -71,6 +71,7 @@
         <select id="cc-f-ruta" aria-label="Filtrar por ruta"><option value="">Todas las rutas</option></select>
         <select id="cc-f-vendedor" aria-label="Filtrar por vendedor o chofer"><option value="">Todos los vendedores</option></select>
         <select id="cc-f-sector" aria-label="Filtrar por sector"><option value="">Todos los sectores</option></select>
+        <select id="cc-f-tipo" aria-label="Filtrar por tipo de cliente"><option value="">Todos los tipos</option></select>
         <select id="cc-f-audio" aria-label="Filtrar por nota de voz">
           <option value="">Con y sin nota de voz</option>
           <option value="1">Con nota de voz</option>
@@ -105,6 +106,7 @@
             <button type="button" role="tab" data-grupo="ruta" class="activo">Por ruta</button>
             <button type="button" role="tab" data-grupo="vendedor">Por vendedor</button>
             <button type="button" role="tab" data-grupo="sector">Por sector</button>
+            <button type="button" role="tab" data-grupo="tipo">Por tipo</button>
           </div>
         </div>
         <p class="cc-suave">Toca una fila para ver sus clientes sin nota de voz.</p>
@@ -118,7 +120,7 @@
 
       <div class="cc-tarjeta">
         <h2>1. Importar clientes desde Excel o CSV</h2>
-        <p class="cc-suave">La primera fila debe tener los títulos. Se reconocen: Código, Nombre, Dirección, Sector/Zona, Ruta, Vendedor/Chofer y Teléfono. Si un código ya existe, se actualizan sus datos; no se borra nada.</p>
+        <p class="cc-suave">La primera fila debe tener los títulos. Se reconocen: Código, Nombre, Tipo de cliente, Dirección, Sector/Zona, Ruta, Vendedor/Chofer y Teléfono. Si un código ya existe, se actualizan sus datos; no se borra nada.</p>
         <label class="cc-archivo">
           <input id="cc-imp-archivo" type="file" accept=".xlsx,.xls,.csv,.txt">
           <span>Elegir archivo de clientes</span>
@@ -149,7 +151,7 @@
       </div>
     </section>
 
-    <!-- ===================== FORMULARIOS (supervisor y admin) ===================== -->
+    <!-- ===================== FORMULARIOS (llenar: usuarios autorizados · respuestas: supervisor · diseñar: admin) ===================== -->
     <section id="vista-formularios" class="cc-vista" aria-labelledby="t-formularios" hidden>
       <h1 id="t-formularios" class="cc-titulo">Formularios</h1>
       <div class="cc-tarjeta">
@@ -157,7 +159,11 @@
           <h2>Formularios de preguntas</h2>
           <button type="button" id="cc-form-nuevo" class="pa-btn pa-btn-sm" data-pa-permiso="disenarFormularios" hidden>+ Nuevo formulario</button>
         </div>
-        <p class="cc-suave">Los formularios <strong>activos</strong> aparecen en la ficha de cada cliente para llenarlos. Cada respuesta queda guardada en el historial del cliente, con la fecha y el usuario.</p>
+        <p class="cc-suave">Pulsa <strong>Llenar</strong> y elige el cliente, o llénalo desde la ficha del cliente. Cada formulario puede ser solo para ciertos <strong>tipos de cliente</strong> y solo para ciertos <strong>roles</strong> (usuario, editor, supervisor o administrador). Cada respuesta queda guardada en el historial del cliente, con la fecha y el usuario.</p>
+        <div class="cc-filtros" id="cc-form-filtros" hidden>
+          <input id="cc-form-buscar" class="pa-input" type="search" placeholder="Buscar formulario…" aria-label="Buscar formulario">
+          <select id="cc-form-f-tipo" aria-label="Filtrar formularios por tipo de cliente"><option value="">Todos los tipos de cliente</option></select>
+        </div>
         <div id="cc-form-lista"></div>
       </div>
     </section>

@@ -267,3 +267,31 @@ code{font-family:Consolas,"Courier New",monospace;background:var(--pa-fondo);pad
 .cc-tabla-resp td{max-width:280px;overflow-wrap:anywhere;vertical-align:top}
 .cc-ver-resp{display:flex;flex-direction:column;gap:10px}
 .cc-ver-resp .pa-input{flex:1;min-width:200px}
+
+/* ---- Formularios por tipo de cliente y por usuario ---- */
+.cc-alcance{margin-top:2px}
+.cc-chip{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--pa-borde);background:var(--pa-fondo);color:var(--pa-suave);max-width:100%;overflow-wrap:anywhere}
+.cc-chip-tipo{background:var(--pa-info-bg);color:var(--pa-azul-osc);border-color:#c9dcf6}
+.cc-chip-usu{background:#f3effc;color:#5b3fa0;border-color:#ddd2f5}
+.cc-alcance-sel{display:flex;flex-direction:column;gap:10px}
+.cc-alcance-sel > .cc-opciones{flex-direction:row;flex-wrap:wrap}
+.cc-alcance-sel > .cc-opciones .cc-opcion{flex:1 1 180px}
+.cc-alcance-zona{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px dashed var(--pa-borde);border-radius:12px;background:var(--pa-fondo)}
+.cc-casillas-cont{display:flex;flex-direction:column;gap:8px}
+.cc-casillas-barra{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
+.cc-casillas-barra .pa-input-sm{flex:1 1 200px}
+.cc-casillas{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px;max-height:260px;overflow:auto;padding:2px}
+.cc-casilla{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--pa-borde);border-radius:10px;background:#fff;cursor:pointer;font-size:14px;min-width:0}
+.cc-casilla input{width:18px;height:18px;accent-color:var(--pa-azul);flex:none;margin:1px 0 0}
+.cc-casilla span{min-width:0;overflow-wrap:anywhere}
+.cc-casilla small{color:var(--pa-suave);font-size:12px}
+.cc-casilla:has(input:checked){border-color:var(--pa-azul-2);background:var(--pa-info-bg)}
+.cc-casilla.cc-apagado{opacity:.6}
+.cc-alcance-zona .pa-fila .pa-input-sm{flex:1 1 180px}
+#cc-form-filtros{margin:4px 0 10px}
+#cc-form-filtros .pa-input{flex:1 1 220px;width:auto}
+.cc-elegir{display:flex;flex-direction:column;gap:10px}
+.cc-elegir .cc-filtros{margin:0}
+.cc-lista-elegir{grid-template-columns:1fr!important;max-height:55vh;overflow:auto}
+.cc-cliente.cc-llenado{border-color:#bfe3cc;background:#f3fbf6}
+.cc-cliente.cc-llenado .cc-estado-audio{font-weight:700}

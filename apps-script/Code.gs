@@ -13,7 +13,9 @@
  *      sincronizar la carpeta de Drive y asociar audios sueltos.
  *   6. Actividad: registro de quién hizo qué y cuándo.
  *   7. Formularios: el administrador diseña formularios de preguntas; se llenan
- *      desde la ficha del cliente y cada respuesta queda en su historial.
+ *      desde la ficha del cliente (o desde el menú Formularios eligiendo el cliente)
+ *      y cada respuesta queda en su historial. Cada formulario puede limitarse a
+ *      ciertos TIPOS DE CLIENTE y a ciertos ROLES (usuario, editor, supervisor, admin).
  *
  *  Roles: usuario < editor < supervisor < admin  (ver PERMISOS más abajo).
  *
@@ -46,7 +48,8 @@ const CONFIG = {
   ZONA: 'America/Santo_Domingo',
   MAX_AUDIO_MB: 10,              // tamaño máximo de una nota de voz
   REGISTRAR_ESCUCHAS: true,      // true = la actividad registra quién escuchó cada audio
-  MAX_IMPORTAR_POR_LOTE: 2000    // filas por envío al importar clientes
+  MAX_IMPORTAR_POR_LOTE: 2000,   // filas por envío al importar clientes
+  MAX_PREGUNTAS: 200             // preguntas por formulario
 };
 
 /*
@@ -71,14 +74,17 @@ const HOJA_RESPUESTAS = 'Respuestas';
 
 const COLUMNAS = ['usuario', 'nombre', 'rol', 'activo', 'salt', 'hash',
                   'creado', 'actualizado', 'ultimoAcceso', 'actualizadoPor'];
-// "oculto" va al final para no mover las columnas que ya existen.
+// Las columnas nuevas ("oculto", "tipo") van al final para no mover las que ya existen.
 const COL_CLI = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono',
-                 'audioId', 'audioNombre', 'audioFecha', 'audioPor', 'actualizado', 'actualizadoPor', 'oculto'];
-const CAMPOS_CLI = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono'];
+                 'audioId', 'audioNombre', 'audioFecha', 'audioPor', 'actualizado', 'actualizadoPor', 'oculto', 'tipo'];
+const CAMPOS_CLI = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'tipo'];
 const COL_ACT = ['fecha', 'usuario', 'accion', 'detalle'];
+// tiposCliente / roles: listas en JSON (vacía = todos). preguntas2: continuación si el formulario es muy largo.
 const COL_FORM = ['id', 'titulo', 'descripcion', 'activo', 'unaVez', 'preguntas',
-                  'creado', 'creadoPor', 'actualizado', 'actualizadoPor'];
-const COL_RES = ['id', 'fecha', 'formularioId', 'formulario', 'codigo', 'cliente', 'usuario', 'resumen', 'datos'];
+                  'creado', 'creadoPor', 'actualizado', 'actualizadoPor', 'tiposCliente', 'roles', 'preguntas2'];
+const COL_RES = ['id', 'fecha', 'formularioId', 'formulario', 'codigo', 'cliente', 'usuario', 'resumen', 'datos',
+                 'tipoCliente', 'datos2'];
+const MAX_CELDA = 45000; // caracteres por celda (Google Sheets admite 50,000)
 
 const ROLES = ['usuario', 'editor', 'supervisor', 'admin'];
 const NIVEL = { usuario: 0, editor: 1, supervisor: 2, admin: 3 };
@@ -89,7 +95,7 @@ const NIVEL = { usuario: 0, editor: 1, supervisor: 2, admin: 3 };
  * La app lee esta misma tabla, así que los botones se ajustan solos.
  */
 const PERMISOS = {
-  responderFormularios: 'usuario',    // llenar formularios en la ficha del cliente
+  responderFormularios: 'usuario',    // llenar formularios (además, cada formulario puede limitarse a ciertos roles)
   editarClientes: 'editor',           // crear, editar e importar clientes
   agregarAudio: 'editor',             // grabar / subir nota a clientes que NO tienen nota
   verHistorialCompleto: 'supervisor', // ver en la ficha las respuestas de todos (los demás ven solo las suyas)
@@ -537,6 +543,7 @@ function guardarCliente_(d) {
     }
     if (!datos.nombre) throw new ErrorApp_('Escribe el nombre del cliente.');
     const t = tablaClientes_();
+    asegurarTitulosClientes_(t.hoja);
     const original = d.codigoOriginal ? normCodigo_(d.codigoOriginal) : '';
     const idxNuevo = t.indice[datos.codigo];
     let fila;
@@ -595,6 +602,7 @@ function importarClientes_(d) {
     if (!filas.length) throw new ErrorApp_('No llegaron filas para importar.');
     if (filas.length > CONFIG.MAX_IMPORTAR_POR_LOTE) throw new ErrorApp_('Máximo ' + CONFIG.MAX_IMPORTAR_POR_LOTE + ' filas por envío.');
     const t = tablaClientes_();
+    asegurarTitulosClientes_(t.hoja);
     const nuevos = [];
     const indiceNuevos = {};
     let actualizados = 0, sinCambios = 0;
@@ -884,9 +892,22 @@ function listarActividad_(d) {
 function listarFormularios_(d) {
   const u = requerirSesion_(d);
   const disenar = permite_(u, 'disenarFormularios');
+  const verResp = permite_(u, 'verRespuestas');
+  const responder = permite_(u, 'responderFormularios');
   let lista = leerFormularios_();
-  if (!disenar) lista = lista.filter(function (f) { return f.activo; });
-  if (permite_(u, 'verRespuestas')) {
+  // puedoLlenar: el formulario está activo y el rol de este usuario está entre los elegidos (o no se limitó).
+  lista.forEach(function (f) { f.puedoLlenar = responder && f.activo && puedeLlenar_(u, f); });
+  if (!disenar) lista = lista.filter(function (f) { return f.activo && (f.puedoLlenar || verResp); });
+  const extra = {};
+  if (disenar) {
+    // Cuántas personas activas hay en cada rol (para mostrarlo al elegir quién llena el formulario).
+    const conteo = {};
+    ROLES.forEach(function (r) { conteo[r] = 0; });
+    leerUsuarios_().forEach(function (x) { if (x.activo) conteo[x.rol]++; });
+    extra.conteoRoles = conteo;
+    extra.maxPreguntas = CONFIG.MAX_PREGUNTAS;
+  }
+  if (verResp) {
     const conteo = {};
     const sh = hojaRespuestas_();
     const n = sh.getLastRow() - 1;
@@ -897,7 +918,7 @@ function listarFormularios_(d) {
     }
     lista.forEach(function (f) { f.respuestas = conteo[f.id] || 0; });
   }
-  return { formularios: lista.map(function (f) { delete f.fila; return f; }) };
+  return Object.assign({ formularios: lista.map(function (f) { delete f.fila; return f; }) }, extra);
 }
 
 /** Crea o actualiza un formulario. Las respuestas ya guardadas no cambian (guardan su propia copia de las preguntas). */
@@ -911,7 +932,7 @@ function guardarFormulario_(d) {
     const descripcion = textoLibre_(f.descripcion, 500);
     const brutas = Array.isArray(f.preguntas) ? f.preguntas : [];
     if (!brutas.length) throw new ErrorApp_('Agrega al menos una pregunta.');
-    if (brutas.length > 50) throw new ErrorApp_('Máximo 50 preguntas por formulario.');
+    if (brutas.length > CONFIG.MAX_PREGUNTAS) throw new ErrorApp_('Máximo ' + CONFIG.MAX_PREGUNTAS + ' preguntas por formulario.');
     const usados = {};
     const preguntas = brutas.map(function (p, i) {
       const texto = textoLibre_(p && p.texto, 200).replace(/\s+/g, ' ');
@@ -932,8 +953,21 @@ function guardarFormulario_(d) {
       }
       return q;
     });
-    const json = JSON.stringify(preguntas);
-    if (json.length > 45000) throw new ErrorApp_('El formulario es demasiado largo.');
+    const partes = partirTexto_(JSON.stringify(preguntas));
+    if (!partes) throw new ErrorApp_('El formulario es demasiado largo (acorta las preguntas u opciones, o divídelo en dos formularios).');
+
+    // Tipos de cliente a los que aplica (vacío = todos).
+    const vistosTipo = {};
+    const tiposCliente = (Array.isArray(f.tiposCliente) ? f.tiposCliente : [])
+      .map(function (t) { return limpiarTexto_(t, 120); })
+      .filter(function (t) { const k = normTipo_(t); if (!k || vistosTipo[k]) return false; vistosTipo[k] = true; return true; })
+      .slice(0, 200);
+    // Roles que lo pueden llenar (vacío = todos), en el orden usuario < editor < supervisor < admin.
+    const pedidos = (Array.isArray(f.roles) ? f.roles : []).map(norm_);
+    const roles = ROLES.filter(function (r) { return pedidos.indexOf(r) >= 0; });
+    if (f.soloTipos === true && !tiposCliente.length) throw new ErrorApp_('Elige al menos un tipo de cliente, o marca "Todos los tipos".');
+    if (f.soloRoles === true && !roles.length) throw new ErrorApp_('Elige al menos un rol, o marca "Todos los roles".');
+
     const sh = hojaFormularios_();
     const ahora = new Date();
     const existentes = leerFormularios_();
@@ -944,18 +978,24 @@ function guardarFormulario_(d) {
     const activo = f.activo !== false;
     const unaVez = f.unaVez === true;
     let id;
+    const jsonTipos = JSON.stringify(tiposCliente);
+    const jsonRoles = JSON.stringify(roles);
+    const alcance = (tiposCliente.length ? 'tipos: ' + tiposCliente.join(', ') : 'todos los tipos') + ' · ' +
+                    (roles.length ? 'roles: ' + roles.map(nombreRol_).join(', ') : 'todos los roles');
     if (previo) {
       id = previo.id;
-      sh.getRange(previo.fila, 2, 1, 5).setValues([[titulo, descripcion, activo, unaVez, json]]);
-      sh.getRange(previo.fila, COL_FORM.indexOf('actualizado') + 1, 1, 2).setValues([[ahora, u.usuario]]);
-      registrar_(u.usuario, 'Editó formulario', titulo);
+      sh.getRange(previo.fila, 2, 1, 5).setValues([[titulo, descripcion, activo, unaVez, partes[0]]]);
+      sh.getRange(previo.fila, COL_FORM.indexOf('actualizado') + 1, 1, 5)
+        .setValues([[ahora, u.usuario, jsonTipos, jsonRoles, partes[1]]]);
+      registrar_(u.usuario, 'Editó formulario', titulo + ' (' + preguntas.length + ' preguntas; ' + alcance + ')');
     } else {
       id = nuevoId_('F', 8);
-      sh.appendRow([id, titulo, descripcion, activo, unaVez, json, ahora, u.usuario, ahora, u.usuario]);
-      registrar_(u.usuario, 'Creó formulario', titulo + ' (' + preguntas.length + ' preguntas)');
+      sh.appendRow([id, titulo, descripcion, activo, unaVez, partes[0], ahora, u.usuario, ahora, u.usuario,
+                    jsonTipos, jsonRoles, partes[1]]);
+      registrar_(u.usuario, 'Creó formulario', titulo + ' (' + preguntas.length + ' preguntas; ' + alcance + ')');
     }
     return { formulario: { id: id, titulo: titulo, descripcion: descripcion, activo: activo, unaVez: unaVez,
-                           preguntas: preguntas, actualizado: fecha_(ahora) },
+                           preguntas: preguntas, tiposCliente: tiposCliente, roles: roles, actualizado: fecha_(ahora) },
              mensaje: previo ? 'Formulario actualizado.' : 'Formulario creado.' };
   } finally { lock.releaseLock(); }
 }
@@ -983,8 +1023,17 @@ function responderFormulario_(d) {
     const idx = t.indice[codigo];
     if (idx === undefined || !clienteVisible_(u, t.valores[idx])) throw new ErrorApp_('El cliente no existe.');
     const nombreCliente = String(t.valores[idx][ci_('nombre')] || '');
+    const tipoCliente = String(t.valores[idx][ci_('tipo')] || '');
     const form = leerFormularios_().find(function (x) { return x.id === String(d.formularioId || ''); });
     if (!form || !form.activo) throw new ErrorApp_('Este formulario ya no está disponible. Actualiza la página.');
+    if (!puedeLlenar_(u, form)) {
+      throw new ErrorApp_('El formulario "' + form.titulo + '" es solo para: ' + form.roles.map(nombreRol_).join(', ') +
+                          '. Tu rol es ' + nombreRol_(u.rol) + '.');
+    }
+    if (!aplicaTipo_(form, tipoCliente)) {
+      throw new ErrorApp_('El formulario "' + form.titulo + '" es solo para clientes de tipo: ' + form.tiposCliente.join(', ') +
+                          '. Este cliente es ' + (tipoCliente ? 'de tipo "' + tipoCliente + '"' : 'sin tipo asignado') + '.');
+    }
     if (form.unaVez && respuestasDe_(codigo).some(function (r) { return r.formularioId === form.id; })) {
       throw new ErrorApp_('Este cliente ya respondió el formulario "' + form.titulo + '" (solo se responde una vez).');
     }
@@ -994,8 +1043,8 @@ function responderFormulario_(d) {
       return { id: q.id, p: q.texto, t: q.tipo, v: v };
     });
     if (!datos.some(function (x) { return !vacio_(x.v); })) throw new ErrorApp_('Responde al menos una pregunta.');
-    const json = JSON.stringify(datos);
-    if (json.length > 45000) throw new ErrorApp_('Las respuestas son demasiado largas.');
+    const partes = partirTexto_(JSON.stringify(datos));
+    if (!partes) throw new ErrorApp_('Las respuestas son demasiado largas. Acorta los textos largos e intenta de nuevo.');
     const resumen = datos.filter(function (x) { return !vacio_(x.v); })
       .map(function (x) { return x.p + ': ' + valorTexto_(x.t, x.v); }).join(' | ');
     const ahora = new Date();
@@ -1005,10 +1054,10 @@ function responderFormulario_(d) {
     if (fila > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 500);
     sh.getRange(fila, COL_RES.indexOf('codigo') + 1).setNumberFormat('@');
     sh.getRange(fila, 1, 1, COL_RES.length).setValues([[id, ahora, form.id, form.titulo, codigo, nombreCliente,
-      u.usuario, limpiarTexto_(resumen, 45000), json]]);
+      u.usuario, limpiarTexto_(resumen, MAX_CELDA), partes[0], limpiarTexto_(tipoCliente, 120), partes[1]]]);
     registrar_(u.usuario, 'Llenó formulario', form.titulo + ' — ' + codigo + ' ' + nombreCliente);
     return { respuesta: { id: id, fecha: fecha_(ahora), formularioId: form.id, formulario: form.titulo,
-                          usuario: u.usuario, respuestas: datos, propia: true },
+                          usuario: u.usuario, tipoCliente: tipoCliente, respuestas: datos, propia: true },
              mensaje: 'Respuestas guardadas en el historial del cliente.' };
   } finally { lock.releaseLock(); }
 }
@@ -1071,16 +1120,24 @@ function eliminarRespuesta_(d) {
 function hojaFormularios_() { return asegurarHoja_(HOJA_FORMULARIOS, COL_FORM, []); }
 function hojaRespuestas_() { return asegurarHoja_(HOJA_RESPUESTAS, COL_RES, ['codigo']); }
 
-/** Devuelve la hoja; si no existe la crea con sus títulos (columnas de texto indicadas). */
+/**
+ * Devuelve la hoja; si no existe la crea con sus títulos (columnas de texto indicadas).
+ * Si existe pero es de una versión anterior, pone los títulos actuales (las columnas nuevas van al final).
+ */
 function asegurarHoja_(nombre, columnas, deTexto) {
   const ss = libro_();
   let sh = ss.getSheetByName(nombre);
   if (!sh) {
     sh = ss.insertSheet(nombre);
+    asegurarColumnas_(sh, columnas.length);
     sh.appendRow(columnas);
     sh.setFrozenRows(1);
     sh.getRange(1, 1, 1, columnas.length).setFontWeight('bold');
     deTexto.forEach(function (c) { sh.getRange(1, columnas.indexOf(c) + 1, sh.getMaxRows(), 1).setNumberFormat('@'); });
+  } else {
+    asegurarColumnas_(sh, columnas.length);
+    const actuales = sh.getRange(1, 1, 1, columnas.length).getValues()[0];
+    if (actuales.join('|') !== columnas.join('|')) sh.getRange(1, 1, 1, columnas.length).setValues([columnas]).setFontWeight('bold');
   }
   return sh;
 }
@@ -1089,12 +1146,53 @@ function leerFormularios_() {
   const sh = hojaFormularios_();
   const n = sh.getLastRow() - 1;
   if (n < 1) return [];
+  const c = function (k) { return COL_FORM.indexOf(k); };
   return sh.getRange(2, 1, n, COL_FORM.length).getValues().map(function (f, i) {
-    let preguntas = [];
-    try { preguntas = JSON.parse(f[5] || '[]'); } catch (e) { preguntas = []; }
     return { fila: i + 2, id: String(f[0]), titulo: String(f[1] || ''), descripcion: String(f[2] || ''),
-             activo: esVerdad_(f[3]), unaVez: esVerdad_(f[4]), preguntas: preguntas, actualizado: fecha_(f[8]) };
+             activo: esVerdad_(f[3]), unaVez: esVerdad_(f[4]),
+             preguntas: leerJson_(unirTexto_(f[c('preguntas')], f[c('preguntas2')])),
+             tiposCliente: leerJson_(f[c('tiposCliente')]).map(String),
+             // Solo roles válidos (si quedara algo que no es un rol, se ignora y vale para todos).
+             roles: leerJson_(f[c('roles')]).map(String).filter(function (r) { return ROLES.indexOf(r) >= 0; }),
+             actualizado: fecha_(f[c('actualizado')]) };
   }).filter(function (f) { return f.id; });
+}
+
+/** ¿Este usuario puede llenar el formulario? Depende de su rol (lista de roles vacía = todos). */
+function puedeLlenar_(u, form) {
+  return !form.roles || !form.roles.length || form.roles.indexOf(u.rol) >= 0;
+}
+
+/** ¿El formulario aplica a este tipo de cliente? (lista de tipos vacía = todos). */
+function aplicaTipo_(form, tipo) {
+  if (!form.tiposCliente || !form.tiposCliente.length) return true;
+  const t = normTipo_(tipo);
+  return !!t && form.tiposCliente.some(function (x) { return normTipo_(x) === t; });
+}
+
+/** Tipo de cliente para comparar: sin acentos, minúsculas, espacios simples. */
+function normTipo_(s) {
+  return String(s == null ? '' : s).replace(/^'/, '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Divide un texto largo en dos celdas: [primera, segunda]. La segunda empieza con "~"
+ * para que la hoja nunca la tome como número o fórmula. Devuelve null si no cabe ni en dos.
+ */
+function partirTexto_(texto) {
+  if (texto.length > MAX_CELDA * 2) return null;
+  const resto = texto.slice(MAX_CELDA);
+  return [texto.slice(0, MAX_CELDA), resto ? '~' + resto : ''];
+}
+
+function unirTexto_(a, b) {
+  const s2 = String(b == null ? '' : b);
+  return String(a == null ? '' : a) + (s2.charAt(0) === '~' ? s2.slice(1) : '');
+}
+
+function leerJson_(s) {
+  try { const v = JSON.parse(String(s || '') || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
 }
 
 /** Lee varias filas de Respuestas: pocas, una por una; muchas, en un solo bloque. */
@@ -1115,11 +1213,11 @@ function porRecientes_(a, b) { return (b._t - a._t) || (b._f - a._f); }
 
 function convertirRespuesta_(f, fila) {
   if (!f || !f[0]) return null;
-  let datos = [];
-  try { datos = JSON.parse(f[8] || '[]'); } catch (e) { datos = []; }
+  const datos = leerJson_(unirTexto_(f[COL_RES.indexOf('datos')], f[COL_RES.indexOf('datos2')]));
   return { id: String(f[0]), fecha: fecha_(f[1]), _t: f[1] instanceof Date ? f[1].getTime() : 0, _f: fila || 0,
            formularioId: String(f[2]), formulario: String(f[3]), codigo: normCodigo_(f[4]), cliente: String(f[5]),
-           usuario: String(f[6]), respuestas: datos };
+           usuario: String(f[6]), tipoCliente: String(f[COL_RES.indexOf('tipoCliente')] || '').replace(/^'/, ''),
+           respuestas: datos };
 }
 
 /** Respuestas de un cliente, más reciente primero. Usa el buscador de la hoja (rápido aunque haya miles). */
@@ -1221,7 +1319,7 @@ function registrar_(usuario, accion, detalle) {
 
 /* ------------------------- APOYO: CLIENTES ------------------------- */
 
-const COMPACTO = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor', 'oculto'];
+const COMPACTO = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor', 'oculto', 'tipo'];
 
 function ci_(campo) { return COL_CLI.indexOf(campo); }
 
@@ -1230,8 +1328,9 @@ function esVerdad_(v) { return v === true || String(v).toUpperCase() === 'TRUE' 
 /** Un cliente oculto solo lo ven quienes tienen el permiso "ocultarClientes". */
 function clienteVisible_(u, fila) { return !esVerdad_(fila[ci_('oculto')]) || permite_(u, 'ocultarClientes'); }
 
-/** Pone los títulos de la hoja Clientes (agrega "oculto" si la hoja es de una versión anterior). */
+/** Pone los títulos de la hoja Clientes (agrega "oculto" y "tipo" si la hoja es de una versión anterior). */
 function asegurarTitulosClientes_(sh) {
+  asegurarColumnas_(sh, COL_CLI.length);
   const actual = sh.getRange(1, 1, 1, COL_CLI.length).getValues()[0];
   if (actual[COL_CLI.length - 1] !== COL_CLI[COL_CLI.length - 1]) {
     sh.getRange(1, 1, 1, COL_CLI.length).setValues([COL_CLI]).setFontWeight('bold');
@@ -1263,6 +1362,7 @@ function escribirNuevos_(t, filas) {
 /** Lee la hoja Clientes completa e indexa por código. */
 function tablaClientes_() {
   const sh = hoja_(HOJA_CLIENTES);
+  asegurarColumnas_(sh, COL_CLI.length);
   const n = sh.getLastRow() - 1;
   const valores = n > 0 ? sh.getRange(2, 1, n, COL_CLI.length).getValues() : [];
   const indice = {};
@@ -1278,7 +1378,13 @@ function compactar_(f) {
   return [String(f[ci_('codigo')]), String(f[ci_('nombre')]), String(f[ci_('direccion')]), String(f[ci_('sector')]),
           String(f[ci_('ruta')]), String(f[ci_('vendedor')]), String(f[ci_('telefono')]),
           f[ci_('audioId')] ? 1 : 0, fecha_(f[ci_('audioFecha')]), String(f[ci_('audioPor')] || ''),
-          esVerdad_(f[ci_('oculto')]) ? 1 : 0];
+          esVerdad_(f[ci_('oculto')]) ? 1 : 0, String(f[ci_('tipo')] || '')];
+}
+
+/** Si la hoja tiene menos columnas que las necesarias, las agrega al final. */
+function asegurarColumnas_(sh, total) {
+  const max = sh.getMaxColumns();
+  if (max < total) sh.insertColumnsAfter(max, total - max);
 }
 
 /** Lista compacta con caché por trozos (CacheService admite 100 KB por clave). */

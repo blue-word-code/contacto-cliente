@@ -8,10 +8,11 @@
 (function () {
   'use strict';
 
-  var CAMPOS = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor', 'oculto'];
-  var ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', direccion: 'Dirección', sector: 'Sector / Zona', ruta: 'Ruta',
+  var CAMPOS = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono', 'audio', 'audioFecha', 'audioPor', 'oculto', 'tipo'];
+  var ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', tipo: 'Tipo de cliente', direccion: 'Dirección', sector: 'Sector / Zona', ruta: 'Ruta',
                     vendedor: 'Vendedor / Chofer', telefono: 'Teléfono' };
-  var EDITABLES = ['codigo', 'nombre', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono'];
+  var EDITABLES = ['codigo', 'nombre', 'tipo', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono'];
+  var CON_LISTA = ['tipo', 'sector', 'ruta', 'vendedor']; // campos con sugerencias de valores ya usados
   var NIVEL = { usuario: 0, editor: 1, supervisor: 2, admin: 3 };
   var POR_PAGINA = 60;
   var MAX_MB = 10;
@@ -26,7 +27,9 @@
     filtrados: [],
     grupo: 'ruta',
     cacheAudio: {},     // codigo -> {url, mime}
-    formularios: []     // formularios disponibles (activos; el admin recibe también los inactivos)
+    formularios: [],    // formularios disponibles (activos; el admin recibe también los inactivos)
+    conteoRoles: {},    // personas activas por rol (solo quien diseña formularios)
+    maxPreguntas: 200
   };
 
   /* ---------------- utilidades ---------------- */
@@ -62,6 +65,14 @@
 
   function normalizar(s) {
     return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  /** ¿El formulario aplica a este tipo de cliente? (sin tipos elegidos = todos). Igual que en Code.gs. */
+  function aplicaATipo(f, tipo) {
+    var lista = f.tiposCliente || [];
+    if (!lista.length) return true;
+    var t = normalizar(String(tipo || '').replace(/^'/, ''));
+    return !!t && lista.some(function (x) { return normalizar(String(x).replace(/^'/, '')) === t; });
   }
 
   function miles(n) { return Number(n || 0).toLocaleString('es-DO'); }
@@ -174,7 +185,8 @@
     CAMPOS.forEach(function (k, i) { c[k] = fila[i]; });
     c.audio = !!c.audio;
     c.oculto = !!c.oculto;
-    c._txt = normalizar([c.codigo, c.nombre, c.direccion, c.sector, c.ruta, c.vendedor].join(' ')) + ' ' +
+    c.tipo = String(c.tipo || '');
+    c._txt = normalizar([c.codigo, c.nombre, c.tipo, c.direccion, c.sector, c.ruta, c.vendedor].join(' ')) + ' ' +
              String(c.telefono || '').replace(/\D/g, '');
     return c;
   }
@@ -225,7 +237,7 @@
 
   function llenarFiltros() {
     [['cc-f-ruta', 'ruta', 'Todas las rutas'], ['cc-f-vendedor', 'vendedor', 'Todos los vendedores'],
-     ['cc-f-sector', 'sector', 'Todos los sectores']].forEach(function (f) {
+     ['cc-f-sector', 'sector', 'Todos los sectores'], ['cc-f-tipo', 'tipo', 'Todos los tipos']].forEach(function (f) {
       var sel = $(f[0]), actual = sel.value;
       sel.innerHTML = '';
       sel.appendChild(h('option', { value: '', text: f[2] }));
@@ -242,12 +254,12 @@
     clearTimeout(temporizador);
     temporizador = setTimeout(function () { filtrar(); }, 120);
   });
-  ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-audio', 'cc-f-oculto'].forEach(function (id) {
+  ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-tipo', 'cc-f-audio', 'cc-f-oculto'].forEach(function (id) {
     $(id).addEventListener('change', function () { filtrar(); });
   });
   $('cc-limpiar').addEventListener('click', function () {
     $('cc-buscar').value = '';
-    ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-audio'].forEach(function (id) { $(id).value = ''; });
+    ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-tipo', 'cc-f-audio'].forEach(function (id) { $(id).value = ''; });
     $('cc-f-oculto').value = 'vis';
     filtrar();
     $('cc-buscar').focus();
@@ -258,6 +270,7 @@
     var q = normalizar($('cc-buscar').value);
     var terminos = q ? q.split(' ') : [];
     var ruta = $('cc-f-ruta').value, vend = $('cc-f-vendedor').value, sector = $('cc-f-sector').value, aud = $('cc-f-audio').value;
+    var tipo = $('cc-f-tipo').value;
     var ocu = tiene('ocultarClientes') ? $('cc-f-oculto').value : 'vis';
     var qCodigo = q.toUpperCase();
     estado.filtrados = estado.clientes.filter(function (c) {
@@ -266,6 +279,7 @@
       if (ruta && c.ruta !== ruta) return false;
       if (vend && c.vendedor !== vend) return false;
       if (sector && c.sector !== sector) return false;
+      if (tipo && c.tipo !== tipo) return false;
       if (aud && String(c.audio ? 1 : 0) !== aud) return false;
       for (var i = 0; i < terminos.length; i++) if (c._txt.indexOf(terminos[i]) < 0) return false;
       return true;
@@ -292,7 +306,7 @@
     lista.innerHTML = '';
     var frag = document.createDocumentFragment();
     estado.filtrados.slice(0, estado.mostrados).forEach(function (c) {
-      var info = [c.sector, c.ruta ? 'Ruta ' + c.ruta : '', c.vendedor].filter(Boolean).join(' · ');
+      var info = [c.tipo, c.sector, c.ruta ? 'Ruta ' + c.ruta : '', c.vendedor].filter(Boolean).join(' · ');
       var li = h('li', {}, [
         h('button', { type: 'button', class: 'cc-cliente' + (c.oculto ? ' cc-cliente-oculto' : ''), onclick: function () { abrirFicha(c.codigo); } }, [
           h('span', { class: 'cc-estado-audio ' + (c.audio ? 'si' : 'no'), title: c.audio ? 'Tiene nota de voz' : 'Sin nota de voz' },
@@ -386,7 +400,7 @@
 
     // Datos
     var datos = h('dl', { class: 'cc-datos' });
-    ['direccion', 'sector', 'ruta', 'vendedor', 'telefono'].forEach(function (k) {
+    ['tipo', 'direccion', 'sector', 'ruta', 'vendedor', 'telefono'].forEach(function (k) {
       datos.appendChild(h('div', {}, [h('dt', { text: ETIQUETAS[k] }), h('dd', { text: c[k] || '—' })]));
     });
 
@@ -581,12 +595,13 @@
     var campos = EDITABLES.map(function (k) {
       var input = h(k === 'direccion' ? 'textarea' : 'input', { class: 'pa-input' + (k === 'direccion' ? ' cc-textarea' : ''), rows: k === 'direccion' ? '2' : null,
         type: k === 'telefono' ? 'tel' : (k === 'direccion' ? null : 'text'), maxlength: k === 'direccion' ? '250' : (k === 'codigo' ? '40' : '120'),
-        autocapitalize: k === 'codigo' ? 'characters' : null, list: ['sector', 'ruta', 'vendedor'].indexOf(k) >= 0 ? 'cc-dl-' + k : null });
+        autocapitalize: k === 'codigo' ? 'characters' : null, list: CON_LISTA.indexOf(k) >= 0 ? 'cc-dl-' + k : null,
+        placeholder: k === 'tipo' ? 'Ej.: Colmado, Supermercado, Farmacia' : null });
       input.value = c[k] || '';
       entradas[k] = input;
       return h('label', { class: 'pa-campo' }, [h('span', { class: 'pa-etq', text: ETIQUETAS[k] + (k === 'codigo' || k === 'nombre' ? ' *' : '') }), input]);
     });
-    var listas = ['sector', 'ruta', 'vendedor'].map(function (k) {
+    var listas = CON_LISTA.map(function (k) {
       return h('datalist', { id: 'cc-dl-' + k }, valoresUnicos(k).slice(0, 500).map(function (v) { return h('option', { value: v }); }));
     });
     var msg = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
@@ -621,13 +636,13 @@
     ocupado(b, true, 'Preparando…');
     cargarScript(XLSX_URL).then(function () {
       var conOculto = tiene('ocultarClientes');
-      var filas = [['Código', 'Nombre', 'Dirección', 'Sector', 'Ruta', 'Vendedor/Chofer', 'Teléfono', 'Nota de voz', 'Fecha nota de voz'].concat(conOculto ? ['Oculto'] : [])];
+      var filas = [['Código', 'Nombre', 'Tipo de cliente', 'Dirección', 'Sector', 'Ruta', 'Vendedor/Chofer', 'Teléfono', 'Nota de voz', 'Fecha nota de voz'].concat(conOculto ? ['Oculto'] : [])];
       estado.filtrados.forEach(function (c) {
-        filas.push([c.codigo, c.nombre, c.direccion, c.sector, c.ruta, c.vendedor, c.telefono, c.audio ? 'Sí' : 'No', c.audioFecha || '']
+        filas.push([c.codigo, c.nombre, c.tipo, c.direccion, c.sector, c.ruta, c.vendedor, c.telefono, c.audio ? 'Sí' : 'No', c.audioFecha || '']
           .concat(conOculto ? [c.oculto ? 'Sí' : 'No'] : []));
       });
       var ws = XLSX.utils.aoa_to_sheet(filas);
-      ws['!cols'] = [12, 32, 40, 18, 10, 18, 14, 11, 16].map(function (w) { return { wch: w }; });
+      ws['!cols'] = [12, 32, 18, 40, 18, 10, 18, 14, 11, 16].map(function (w) { return { wch: w }; });
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Clientes');
       var hoy = new Date().toISOString().slice(0, 10);
@@ -660,7 +675,7 @@
     });
     var grupos = {};
     visibles.forEach(function (c) {
-      var g = c[estado.grupo] || '(sin ' + (estado.grupo === 'vendedor' ? 'vendedor' : estado.grupo) + ')';
+      var g = c[estado.grupo] || '(sin ' + estado.grupo + ')';
       grupos[g] = grupos[g] || { total: 0, con: 0 };
       grupos[g].total++;
       if (c.audio) grupos[g].con++;
@@ -669,7 +684,7 @@
     var cont = $('cc-cobertura');
     cont.innerHTML = '';
     if (!nombres.length) { cont.appendChild(h('p', { class: 'pa-vacio', text: 'Todavía no hay clientes.' })); return; }
-    var etq = { ruta: 'Ruta', vendedor: 'Vendedor / Chofer', sector: 'Sector' }[estado.grupo];
+    var etq = { ruta: 'Ruta', vendedor: 'Vendedor / Chofer', sector: 'Sector', tipo: 'Tipo de cliente' }[estado.grupo];
     var cuerpo = h('tbody');
     nombres.forEach(function (n) {
       var g = grupos[n], p = pct(g.con, g.total);
@@ -680,7 +695,7 @@
       ]);
       function ir() {
         $('cc-buscar').value = '';
-        ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector'].forEach(function (id) { $(id).value = ''; });
+        ['cc-f-ruta', 'cc-f-vendedor', 'cc-f-sector', 'cc-f-tipo'].forEach(function (id) { $(id).value = ''; });
         var sel = $('cc-f-' + estado.grupo);
         if (grupos[n] && sel.querySelector('option[value="' + CSS.escape(n) + '"]')) sel.value = n;
         $('cc-f-audio').value = '0';
@@ -704,6 +719,7 @@
   var SINONIMOS = {
     codigo: ['codigo', 'cod', 'cod cliente', 'codigo cliente', 'id cliente', 'id', 'cliente id', 'numero cliente', 'no cliente', 'cardcode', 'code'],
     nombre: ['nombre', 'cliente', 'nombre cliente', 'razon social', 'negocio', 'nombre comercial', 'cardname', 'name'],
+    tipo: ['tipo', 'tipo cliente', 'tipo de cliente', 'tipo negocio', 'tipo de negocio', 'categoria', 'canal', 'segmento', 'clase', 'grupo cliente', 'groupname'],
     direccion: ['direccion', 'dir', 'domicilio', 'calle', 'address', 'ubicacion'],
     sector: ['sector', 'zona', 'barrio', 'localidad', 'municipio', 'provincia', 'ciudad'],
     ruta: ['ruta', 'route', 'ruta venta', 'ruta de venta', 'ruta entrega'],
@@ -716,6 +732,8 @@
     var norm = titulos.map(function (t) { return normalizar(t).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); });
     for (var i = 0; i < norm.length; i++) if (cand.indexOf(norm[i]) >= 0) return i;
     for (var j = 0; j < norm.length; j++) {
+      // "Tipo de cliente" no debe confundirse con el nombre o el código del cliente
+      if (campo !== 'tipo' && /\btipo\b/.test(norm[j])) continue;
       for (var k = 0; k < cand.length; k++) if (cand[k].length > 3 && norm[j].indexOf(cand[k]) >= 0) return j;
     }
     return -1;
@@ -1010,12 +1028,31 @@
 
   function cargarFormularios() {
     return api('listarFormularios').then(function (r) {
-      if (r.ok) estado.formularios = r.formularios || [];
+      if (r.ok) {
+        estado.formularios = r.formularios || [];
+        estado.conteoRoles = r.conteoRoles || {};
+        if (r.maxPreguntas) estado.maxPreguntas = r.maxPreguntas;
+      }
       return r;
     });
   }
 
-  function formulariosActivos() { return estado.formularios.filter(function (f) { return f.activo; }); }
+  /** Formularios que este usuario puede llenar para este cliente (activos, usuario autorizado y tipo de cliente que aplica). */
+  function formulariosPara(c) {
+    return estado.formularios.filter(function (f) { return f.activo && f.puedoLlenar !== false && aplicaATipo(f, c.tipo); });
+  }
+
+  /** Texto corto de a quién aplica el formulario. */
+  function textoTipos(f) {
+    return f.tiposCliente && f.tiposCliente.length ? 'Tipos: ' + f.tiposCliente.join(', ') : 'Todos los tipos de cliente';
+  }
+  var ROLES = [['usuario', 'Usuario'], ['editor', 'Editor'], ['supervisor', 'Supervisor'], ['admin', 'Administrador']];
+  var NOMBRE_ROL = {};
+  ROLES.forEach(function (r) { NOMBRE_ROL[r[0]] = r[1]; });
+  function textoRoles(f) {
+    var roles = f.roles || [];
+    return roles.length ? 'Lo llenan: ' + roles.map(function (r) { return NOMBRE_ROL[r] || r; }).join(', ') : 'Lo llenan: todos los roles';
+  }
 
   /** Sección de la ficha: botones para llenar formularios + historial de respuestas del cliente. */
   function pintarFormulariosFicha(c, zona) {
@@ -1028,10 +1065,12 @@
     function pintarBotones() {
       botones.innerHTML = '';
       if (!tiene('responderFormularios')) return;
-      var activos = formulariosActivos();
+      var activos = formulariosPara(c);
       if (!activos.length) {
-        botones.appendChild(h('p', { class: 'cc-suave', text: tiene('disenarFormularios')
-          ? 'No hay formularios activos. Créalos en el menú Formularios.' : 'No hay formularios para llenar.' }));
+        var hayActivos = estado.formularios.some(function (f) { return f.activo && f.puedoLlenar !== false; });
+        botones.appendChild(h('p', { class: 'cc-suave', text: hayActivos
+          ? 'No hay formularios para ' + (c.tipo ? 'clientes de tipo "' + c.tipo + '".' : 'clientes sin tipo asignado.')
+          : (tiene('disenarFormularios') ? 'No hay formularios activos. Créalos en el menú Formularios.' : 'No tienes formularios asignados para llenar.') }));
         return;
       }
       activos.forEach(function (f) {
@@ -1138,7 +1177,7 @@
     var form = h('form', { class: 'pa-form', novalidate: true }, [
       f.descripcion ? h('p', { class: 'cc-suave cc-pre', text: f.descripcion }) : null
     ].concat(bloques, [msg, h('div', { class: 'pa-fila pa-fin' }, [guardar])]));
-    var m = modal(f.titulo, form, { sub: c.codigo + ' — ' + c.nombre });
+    var m = modal(f.titulo, form, { sub: c.codigo + ' — ' + c.nombre + (c.tipo ? ' · ' + c.tipo : '') });
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       var respuestas = {}, falta = null, alguna = false;
@@ -1166,21 +1205,48 @@
   /* ---- vista Formularios (supervisor: ver respuestas · admin: además diseñar) ---- */
 
   $('cc-form-nuevo').addEventListener('click', function () { editarFormulario(null); });
+  var tempForm = null;
+  $('cc-form-buscar').addEventListener('input', function () { clearTimeout(tempForm); tempForm = setTimeout(pintarListaFormularios, 150); });
+  $('cc-form-f-tipo').addEventListener('change', pintarListaFormularios);
+
+  /** Llena el filtro "tipo de cliente" de la vista Formularios con los tipos usados en clientes y formularios. */
+  function llenarFiltroTiposForm() {
+    var sel = $('cc-form-f-tipo'), actual = sel.value, vistos = {};
+    valoresUnicos('tipo').forEach(function (t) { vistos[normalizar(t)] = t; });
+    estado.formularios.forEach(function (f) { (f.tiposCliente || []).forEach(function (t) { if (!vistos[normalizar(t)]) vistos[normalizar(t)] = t; }); });
+    var tipos = Object.keys(vistos).map(function (k) { return vistos[k]; }).sort(function (a, b) { return a.localeCompare(b, 'es'); });
+    sel.innerHTML = '';
+    sel.appendChild(h('option', { value: '', text: 'Todos los tipos de cliente' }));
+    tipos.forEach(function (t) { sel.appendChild(h('option', { value: t, text: 'Para: ' + t })); });
+    sel.value = actual;
+    sel.hidden = !tipos.length;
+  }
 
   function pintarListaFormularios() {
     var cont = $('cc-form-lista');
     cont.innerHTML = '';
-    var lista = estado.formularios;
-    if (!lista.length) {
-      cont.appendChild(h('p', { class: 'pa-vacio', text: tiene('disenarFormularios') ? 'Todavía no hay formularios. Pulsa "+ Nuevo formulario".' : 'Todavía no hay formularios.' }));
+    var todos = estado.formularios;
+    $('cc-form-filtros').hidden = todos.length < 2;
+    llenarFiltroTiposForm();
+    var q = normalizar($('cc-form-buscar').value), tipo = $('cc-form-f-tipo').value;
+    var lista = todos.filter(function (f) {
+      if (q && normalizar(f.titulo + ' ' + (f.descripcion || '') + ' ' + (f.tiposCliente || []).join(' ')).indexOf(q) < 0) return false;
+      if (tipo && !aplicaATipo(f, tipo)) return false;
+      return true;
+    });
+    if (!todos.length) {
+      cont.appendChild(h('p', { class: 'pa-vacio', text: tiene('disenarFormularios') ? 'Todavía no hay formularios. Pulsa "+ Nuevo formulario".' : 'No tienes formularios asignados para llenar.' }));
       return;
     }
+    if (!lista.length) { cont.appendChild(h('p', { class: 'pa-vacio', text: 'Ningún formulario coincide con el filtro.' })); return; }
     var ul = h('ul', { class: 'cc-form-lista' });
     lista.forEach(function (f) {
       var acciones = [];
-      if (tiene('verRespuestas')) acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sm', text: 'Ver respuestas', onclick: function () { verRespuestas(f); } }));
+      if (f.activo && f.puedoLlenar) acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sm', text: 'Llenar', onclick: function () { elegirCliente(f); } }));
+      if (tiene('verRespuestas')) acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sm' + (f.activo && f.puedoLlenar ? ' pa-btn-sec' : ''), text: 'Ver respuestas', onclick: function () { verRespuestas(f); } }));
       if (tiene('disenarFormularios')) {
         acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: 'Editar', onclick: function () { editarFormulario(f); } }));
+        acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: 'Duplicar', title: 'Crear una copia (por ejemplo, para otro tipo de cliente)', onclick: function () { editarFormulario(f, true); } }));
         acciones.push(h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: f.activo ? 'Desactivar' : 'Activar', onclick: function (e) {
           var b = e.currentTarget; ocupado(b, true, '…');
           var copia = JSON.parse(JSON.stringify(f)); copia.activo = !f.activo;
@@ -1207,8 +1273,13 @@
           h('div', { class: 'cc-etiquetas' }, [
             h('span', { class: 'pa-tag ' + (f.activo ? 'pa-tag-editor' : ''), text: f.activo ? 'Activo' : 'Inactivo' }),
             f.unaVez ? h('span', { class: 'pa-tag', text: 'Una vez por cliente' }) : null,
+            f.activo && !f.puedoLlenar ? h('span', { class: 'pa-tag pa-tag-yo', text: 'No es para tu rol' }) : null,
             h('span', { class: 'cc-suave', text: f.preguntas.length + (f.preguntas.length === 1 ? ' pregunta' : ' preguntas') +
               (f.respuestas !== undefined ? ' · ' + miles(f.respuestas) + (f.respuestas === 1 ? ' respuesta' : ' respuestas') : '') + (f.actualizado ? ' · editado ' + f.actualizado : '') })
+          ]),
+          h('div', { class: 'cc-etiquetas cc-alcance' }, [
+            h('span', { class: 'cc-chip cc-chip-tipo', text: textoTipos(f) }),
+            h('span', { class: 'cc-chip cc-chip-usu', text: textoRoles(f) })
           ]),
           f.descripcion ? h('small', { class: 'cc-suave', text: f.descripcion }) : null
         ]),
@@ -1218,10 +1289,76 @@
     cont.appendChild(ul);
   }
 
-  /** Editor de formularios (crear o modificar). */
-  function editarFormulario(f) {
-    var nuevo = !f;
-    f = f ? JSON.parse(JSON.stringify(f)) : { titulo: '', descripcion: '', activo: true, unaVez: false, preguntas: [] };
+  /**
+   * Lista de casillas con buscador opcional. items: [{valor, texto, detalle}]. Devuelve {el, elegidos(), refrescar()}.
+   */
+  function grupoCasillas(items, marcados, opciones) {
+    opciones = opciones || {};
+    var set = {};
+    (marcados || []).forEach(function (v) { set[v] = true; });
+    var cont = h('div', { class: 'cc-casillas' });
+    var buscar = opciones.buscador ? h('input', { class: 'pa-input pa-input-sm', type: 'search', placeholder: opciones.buscador }) : null;
+    var cuenta = h('small', { class: 'cc-suave' });
+    function pintar() {
+      cont.innerHTML = '';
+      var q = buscar ? normalizar(buscar.value) : '';
+      var vis = items.filter(function (it) { return !q || normalizar(it.texto + ' ' + (it.detalle || '') + ' ' + it.valor).indexOf(q) >= 0; });
+      vis.forEach(function (it) {
+        var cb = h('input', { type: 'checkbox', checked: set[it.valor] ? true : null });
+        cb.addEventListener('change', function () { if (cb.checked) set[it.valor] = true; else delete set[it.valor]; contar(); });
+        cont.appendChild(h('label', { class: 'cc-casilla' + (it.apagado ? ' cc-apagado' : '') }, [cb, h('span', {}, [it.texto, it.detalle ? h('small', { text: ' ' + it.detalle }) : null])]));
+      });
+      if (!vis.length) cont.appendChild(h('p', { class: 'cc-suave', text: items.length ? 'Nada coincide con la búsqueda.' : (opciones.vacio || 'No hay opciones.') }));
+      contar();
+      return vis;
+    }
+    function contar() { var n = Object.keys(set).length; cuenta.textContent = n + (n === 1 ? ' elegido' : ' elegidos'); }
+    var marcarVis = h('button', { type: 'button', class: 'pa-enlace', text: 'Marcar los visibles', onclick: function () {
+      var q = buscar ? normalizar(buscar.value) : '';
+      items.forEach(function (it) { if (!q || normalizar(it.texto + ' ' + (it.detalle || '') + ' ' + it.valor).indexOf(q) >= 0) set[it.valor] = true; });
+      pintar();
+    } });
+    var quitar = h('button', { type: 'button', class: 'pa-enlace', text: 'Quitar todos', onclick: function () { set = {}; pintar(); } });
+    if (buscar) buscar.addEventListener('input', pintar);
+    pintar();
+    return {
+      el: h('div', { class: 'cc-casillas-cont' }, [h('div', { class: 'cc-casillas-barra' }, [buscar, cuenta, marcarVis, quitar]), cont]),
+      elegidos: function () { return items.map(function (it) { return it.valor; }).filter(function (v) { return set[v]; }); },
+      agregar: function (it) {
+        if (!items.some(function (x) { return normalizar(x.valor) === normalizar(it.valor); })) items.push(it);
+        var existente = items.filter(function (x) { return normalizar(x.valor) === normalizar(it.valor); })[0];
+        set[existente.valor] = true; pintar();
+      }
+    };
+  }
+
+  /** Selector "Todos" / "Solo los elegidos" con su lista de casillas. */
+  function selectorAlcance(nombre, textoTodos, textoSolo, soloInicial, contenido) {
+    var radioTodos = h('input', { type: 'radio', name: nombre, value: 'todos', checked: soloInicial ? null : true });
+    var radioSolo = h('input', { type: 'radio', name: nombre, value: 'solo', checked: soloInicial ? true : null });
+    var zona = h('div', { class: 'cc-alcance-zona' }, [contenido]);
+    function ver() { zona.hidden = !radioSolo.checked; }
+    radioTodos.addEventListener('change', ver); radioSolo.addEventListener('change', ver); ver();
+    return {
+      el: h('div', { class: 'cc-alcance-sel' }, [
+        h('div', { class: 'cc-opciones cc-pastillas', role: 'radiogroup' }, [
+          h('label', { class: 'cc-opcion' }, [radioTodos, h('span', { text: textoTodos })]),
+          h('label', { class: 'cc-opcion' }, [radioSolo, h('span', { text: textoSolo })])
+        ]), zona]),
+      solo: function () { return radioSolo.checked; }
+    };
+  }
+
+  /** Editor de formularios (crear, modificar o duplicar). */
+  function editarFormulario(f, duplicar) {
+    var nuevo = !f || !!duplicar;
+    f = f ? JSON.parse(JSON.stringify(f)) : { titulo: '', descripcion: '', activo: true, unaVez: false, preguntas: [], tiposCliente: [], roles: [] };
+    if (duplicar) {
+      f.id = ''; f.titulo = (f.titulo + ' (copia)').slice(0, 100); f.respuestas = 0;
+      f.preguntas.forEach(function (q) { delete q.id; });
+    }
+    f.tiposCliente = f.tiposCliente || [];
+    f.roles = f.roles || [];
     var titulo = h('input', { class: 'pa-input', type: 'text', maxlength: '100', placeholder: 'Ej.: Visita de supervisión' });
     titulo.value = f.titulo;
     var desc = h('textarea', { class: 'pa-input cc-textarea', rows: '2', maxlength: '500', placeholder: 'Instrucciones para quien lo llena (opcional)' });
@@ -1275,18 +1412,47 @@
       fila.enfocar = function () { texto.focus(); };
       return fila;
     }
+    var conteoPreg = h('small', { class: 'cc-suave' });
     function repintar() {
       zonaPreg.innerHTML = '';
       filas.forEach(function (fl, i) { fl.num.textContent = 'Pregunta ' + (i + 1); zonaPreg.appendChild(fl.el); });
       if (!filas.length) zonaPreg.appendChild(h('p', { class: 'cc-suave', text: 'Agrega la primera pregunta.' }));
+      conteoPreg.textContent = filas.length + ' de ' + estado.maxPreguntas + ' preguntas posibles';
     }
     f.preguntas.forEach(function (q) { filas.push(filaPregunta(q)); });
     if (!filas.length) filas.push(filaPregunta());
     repintar();
 
     var agregar = h('button', { type: 'button', class: 'pa-btn pa-btn-sec', text: '+ Agregar pregunta', onclick: function () {
+      if (filas.length >= estado.maxPreguntas) { mensaje(msg, 'Máximo ' + estado.maxPreguntas + ' preguntas por formulario.'); return; }
       var fl = filaPregunta(); filas.push(fl); repintar(); fl.enfocar();
     } });
+
+    // ---- ¿Para qué tipos de cliente? ----
+    var conteoTipo = {};
+    estado.clientes.forEach(function (c) { if (c.tipo && !c.oculto) conteoTipo[c.tipo] = (conteoTipo[c.tipo] || 0) + 1; });
+    var itemsTipo = Object.keys(conteoTipo).sort(function (a, b) { return a.localeCompare(b, 'es'); })
+      .map(function (t) { return { valor: t, texto: t, detalle: '(' + miles(conteoTipo[t]) + (conteoTipo[t] === 1 ? ' cliente)' : ' clientes)') }; });
+    f.tiposCliente.forEach(function (t) {
+      var ya = itemsTipo.filter(function (x) { return normalizar(x.valor) === normalizar(t); })[0];
+      if (!ya) itemsTipo.push({ valor: t, texto: t, detalle: '(sin clientes todavía)' });
+    });
+    var marcadosTipo = itemsTipo.filter(function (x) { return f.tiposCliente.some(function (t) { return normalizar(t) === normalizar(x.valor); }); })
+      .map(function (x) { return x.valor; });
+    var casTipos = grupoCasillas(itemsTipo, marcadosTipo, { vacio: 'Todavía no hay clientes con tipo. Escribe un tipo abajo o asígnalo en la ficha / importación de clientes.' });
+    var nuevoTipo = h('input', { class: 'pa-input pa-input-sm', type: 'text', maxlength: '120', placeholder: 'Otro tipo (ej.: Farmacia)' });
+    function agregarTipo() { var t = nuevoTipo.value.trim(); if (!t) return; casTipos.agregar({ valor: t, texto: t, detalle: '(nuevo)' }); nuevoTipo.value = ''; nuevoTipo.focus(); }
+    nuevoTipo.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); agregarTipo(); } });
+    var selTipos = selectorAlcance('alc-tipo-' + Date.now(), 'Todos los tipos de cliente', 'Solo estos tipos', f.tiposCliente.length > 0,
+      h('div', {}, [casTipos.el, h('div', { class: 'pa-fila' }, [nuevoTipo, h('button', { type: 'button', class: 'pa-btn pa-btn-sec pa-btn-sm', text: 'Agregar tipo', onclick: agregarTipo })])]));
+
+    // ---- ¿Qué usuarios lo pueden llenar? ----
+    var itemsRol = ROLES.map(function (r) {
+      var n = estado.conteoRoles[r[0]];
+      return { valor: r[0], texto: r[1], detalle: n === undefined ? '' : '(' + miles(n) + (n === 1 ? ' persona)' : ' personas)') };
+    });
+    var casRol = grupoCasillas(itemsRol, f.roles, {});
+    var selRol = selectorAlcance('alc-rol-' + Date.now(), 'Todos los roles', 'Solo estos roles', f.roles.length > 0, casRol.el);
     var msg = h('p', { class: 'pa-msg', 'aria-live': 'polite' });
     var guardar = h('button', { type: 'submit', class: 'pa-btn', text: nuevo ? 'Crear formulario' : 'Guardar cambios' });
     var form = h('form', { class: 'pa-form', novalidate: true }, [
@@ -1297,15 +1463,27 @@
         h('label', { class: 'cc-check' }, [unaVez, ' Cada cliente lo responde una sola vez'])
       ]),
       !nuevo && f.respuestas ? h('p', { class: 'pa-msg pa-msg-info', text: 'Este formulario ya tiene ' + miles(f.respuestas) + ' respuestas. Si cambias las preguntas, las respuestas anteriores no cambian: cada una conserva las preguntas tal como estaban.' }) : null,
-      h('h3', { class: 'cc-seccion-tit', text: 'Preguntas' }),
+      h('h3', { class: 'cc-seccion-tit', text: '¿Para qué tipos de cliente?' }),
+      h('p', { class: 'cc-suave', text: 'El formulario solo aparece en la ficha de los clientes de los tipos elegidos.' }),
+      selTipos.el,
+      h('h3', { class: 'cc-seccion-tit', text: '¿Quién lo puede llenar?' }),
+      h('p', { class: 'cc-suave', text: 'Solo las personas con los roles elegidos lo verán para llenarlo. El rol de cada persona se cambia en el menú Usuarios. Supervisores y administradores pueden ver las respuestas aunque su rol no esté elegido.' }),
+      selRol.el,
+      h('div', { class: 'cc-tarjeta-cab' }, [h('h3', { class: 'cc-seccion-tit', text: 'Preguntas' }), conteoPreg]),
       zonaPreg, h('div', {}, [agregar]),
       msg, h('div', { class: 'pa-fila pa-fin' }, [guardar])
     ]);
-    var m = modal(nuevo ? 'Nuevo formulario' : 'Editar formulario', form, { ancho: true });
+    repintar();
+    var m = modal(duplicar ? 'Duplicar formulario' : (nuevo ? 'Nuevo formulario' : 'Editar formulario'), form, { ancho: true });
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       var preguntas = filas.map(function (fl) { return fl.leer(); });
+      var tiposElegidos = selTipos.solo() ? casTipos.elegidos() : [];
+      var rolesElegidos = selRol.solo() ? casRol.elegidos() : [];
       var err = !titulo.value.trim() ? 'Escribe el título del formulario.' : (!preguntas.length ? 'Agrega al menos una pregunta.' : '');
+      if (!err && selTipos.solo() && !tiposElegidos.length) err = 'Elige al menos un tipo de cliente, o marca "Todos los tipos de cliente".';
+      if (!err && selRol.solo() && !rolesElegidos.length) err = 'Elige al menos un rol, o marca "Todos los roles".';
+      if (!err && preguntas.length > estado.maxPreguntas) err = 'Máximo ' + estado.maxPreguntas + ' preguntas por formulario.';
       preguntas.forEach(function (q, i) {
         if (err) return;
         if (!q.texto) err = 'La pregunta ' + (i + 1) + ' no tiene texto.';
@@ -1314,7 +1492,8 @@
       if (err) { mensaje(msg, err); return; }
       ocupado(guardar, true, 'Guardando…');
       api('guardarFormulario', { formulario: { id: nuevo ? '' : f.id, titulo: titulo.value.trim(), descripcion: desc.value.trim(),
-        activo: activo.checked, unaVez: unaVez.checked, preguntas: preguntas } }).then(function (r) {
+        activo: activo.checked, unaVez: unaVez.checked, preguntas: preguntas,
+        tiposCliente: tiposElegidos, roles: rolesElegidos, soloTipos: selTipos.solo(), soloRoles: selRol.solo() } }).then(function (r) {
         ocupado(guardar, false);
         if (!r.ok) { mensaje(msg, r.error); return; }
         aviso(r.mensaje); m.cerrar();
@@ -1322,6 +1501,69 @@
       });
     });
     setTimeout(function () { titulo.focus(); }, 50);
+  }
+
+  /**
+   * "Llenar" desde la vista Formularios: elige el cliente (solo los tipos a los que aplica el formulario)
+   * y abre el formulario. La ventana queda abierta para seguir llenando a otros clientes.
+   */
+  function elegirCliente(f) {
+    var aptos = estado.clientes.filter(function (c) { return !c.oculto && aplicaATipo(f, c.tipo); });
+    var llenados = {};
+    var buscar = h('input', { class: 'pa-input', type: 'search', placeholder: 'Buscar cliente por código, nombre, dirección o teléfono…', autocomplete: 'off' });
+    var selRuta = h('select', { class: 'pa-input', 'aria-label': 'Filtrar por ruta' });
+    var selTipo = h('select', { class: 'pa-input', 'aria-label': 'Filtrar por tipo de cliente' });
+    function llenarSelect(sel, campo, todos) {
+      var vistos = {};
+      aptos.forEach(function (c) { if (c[campo]) vistos[c[campo]] = true; });
+      sel.innerHTML = '';
+      sel.appendChild(h('option', { value: '', text: todos }));
+      Object.keys(vistos).sort(function (a, b) { return a.localeCompare(b, 'es', { numeric: true }); })
+        .forEach(function (v) { sel.appendChild(h('option', { value: v, text: v })); });
+      sel.hidden = sel.options.length <= 2;
+    }
+    llenarSelect(selRuta, 'ruta', 'Todas las rutas');
+    llenarSelect(selTipo, 'tipo', 'Todos los tipos');
+    var info = h('p', { class: 'cc-suave' });
+    var ul = h('ul', { class: 'cc-lista cc-lista-elegir' });
+    function pintar() {
+      var q = normalizar(buscar.value), terminos = q ? q.split(' ') : [], ruta = selRuta.value, tipo = selTipo.value;
+      var vis = aptos.filter(function (c) {
+        if (ruta && c.ruta !== ruta) return false;
+        if (tipo && c.tipo !== tipo) return false;
+        for (var i = 0; i < terminos.length; i++) if (c._txt.indexOf(terminos[i]) < 0) return false;
+        return true;
+      });
+      info.textContent = miles(vis.length) + (vis.length === 1 ? ' cliente' : ' clientes') +
+        (f.tiposCliente && f.tiposCliente.length ? ' de tipo ' + f.tiposCliente.join(', ') : '') +
+        (vis.length > 50 ? ' · se muestran 50, escribe para buscar' : '');
+      ul.innerHTML = '';
+      vis.slice(0, 50).forEach(function (c) {
+        var detalle = [c.tipo, c.ruta ? 'Ruta ' + c.ruta : '', c.sector].filter(Boolean).join(' · ');
+        ul.appendChild(h('li', {}, [h('button', { type: 'button', class: 'cc-cliente' + (llenados[c.codigo] ? ' cc-llenado' : ''), onclick: function () {
+          llenarFormulario(c, f, function () { llenados[c.codigo] = true; pintar(); });
+        } }, [
+          h('span', { class: 'cc-estado-audio ' + (llenados[c.codigo] ? 'si' : 'no'), text: llenados[c.codigo] ? '✓' : '' }),
+          h('span', { class: 'cc-cliente-txt' }, [h('strong', { text: c.nombre || '(sin nombre)' }),
+            h('small', {}, [h('span', { class: 'cc-codigo', text: c.codigo }), detalle ? ' ' + detalle : '']),
+            c.direccion ? h('small', { class: 'cc-dir', text: c.direccion }) : null])
+        ])]));
+      });
+      var tiposF = f.tiposCliente || [];
+      if (!vis.length) ul.appendChild(h('li', { class: 'cc-vacio', text: aptos.length ? 'Ningún cliente coincide con la búsqueda.'
+        : (tiposF.length ? 'No hay clientes de ' + (tiposF.length > 1 ? 'los tipos ' : 'tipo ') + tiposF.join(', ') + '. Asigna el tipo en la ficha del cliente o en la importación.'
+                         : 'Todavía no hay clientes cargados.') }));
+    }
+    var temp = null;
+    buscar.addEventListener('input', function () { clearTimeout(temp); temp = setTimeout(pintar, 120); });
+    selRuta.addEventListener('change', pintar);
+    selTipo.addEventListener('change', pintar);
+    modal('Llenar: ' + f.titulo, h('div', { class: 'cc-elegir' }, [
+      h('p', { class: 'cc-suave', text: 'Elige el cliente. Al guardar, puedes seguir con el siguiente.' }),
+      buscar, h('div', { class: 'cc-filtros' }, [selTipo, selRuta]), info, ul
+    ]), { ancho: true, sub: textoTipos(f) });
+    pintar();
+    setTimeout(function () { buscar.focus(); }, 50);
   }
 
   /** Tabla con todas las respuestas de un formulario + descarga a Excel. */
@@ -1342,7 +1584,9 @@
         var q = (x.respuestas || []).filter(function (a) { return a.id === col.id; })[0];
         return q ? formatoValor(q.t, q.v) : '';
       }
-      var buscar = h('input', { class: 'pa-input', type: 'search', placeholder: 'Filtrar por cliente, código, usuario o respuesta…' });
+      /** Tipo del cliente al momento de responder (o el actual, en respuestas anteriores a este cambio). */
+      function tipoDe(x) { return x.tipoCliente || (estado.porCodigo[x.codigo] || {}).tipo || ''; }
+      var buscar = h('input', { class: 'pa-input', type: 'search', placeholder: 'Filtrar por cliente, código, tipo, usuario o respuesta…' });
       var excel = h('button', { type: 'button', class: 'pa-btn pa-btn-sec', text: 'Descargar Excel' });
       var info = h('p', { class: 'cc-suave' });
       var tablaCont = h('div', { class: 'cc-tabla-cont' });
@@ -1350,7 +1594,7 @@
         var q = normalizar(buscar.value);
         if (!q) return lista;
         return lista.filter(function (x) {
-          return normalizar([x.fecha, x.codigo, x.cliente, x.usuario].concat(cols.map(function (c) { return valor(x, c); })).join(' ')).indexOf(q) >= 0;
+          return normalizar([x.fecha, x.codigo, x.cliente, tipoDe(x), x.usuario].concat(cols.map(function (c) { return valor(x, c); })).join(' ')).indexOf(q) >= 0;
         });
       }
       function pintar() {
@@ -1358,11 +1602,12 @@
         info.textContent = miles(filas.length) + ' de ' + miles(lista.length) + ' respuestas' + (filas.length > 300 ? ' · se muestran las 300 más recientes (el Excel trae todas)' : '');
         tablaCont.innerHTML = '';
         tablaCont.appendChild(h('table', { class: 'pa-tabla cc-tabla cc-tabla-resp' }, [
-          h('thead', {}, [h('tr', {}, ['Fecha', 'Código', 'Cliente', 'Usuario'].concat(cols.map(function (c) { return c.texto; })).map(function (t) { return h('th', { text: t }); }))]),
+          h('thead', {}, [h('tr', {}, ['Fecha', 'Código', 'Cliente', 'Tipo', 'Usuario'].concat(cols.map(function (c) { return c.texto; })).map(function (t) { return h('th', { text: t }); }))]),
           h('tbody', {}, filas.slice(0, 300).map(function (x) {
             var tr = h('tr', { class: estado.porCodigo[x.codigo] ? 'cc-fila-clic' : '', title: estado.porCodigo[x.codigo] ? 'Abrir la ficha del cliente' : '' },
               [h('td', { 'data-etq': 'Fecha', text: x.fecha }), h('td', { 'data-etq': 'Código' }, [h('span', { class: 'cc-codigo', text: x.codigo })]),
-               h('td', { 'data-etq': 'Cliente', text: x.cliente }), h('td', { 'data-etq': 'Usuario', text: x.usuario })]
+               h('td', { 'data-etq': 'Cliente', text: x.cliente }), h('td', { 'data-etq': 'Tipo', text: tipoDe(x) }),
+               h('td', { 'data-etq': 'Usuario', text: x.usuario })]
                 .concat(cols.map(function (c) { return h('td', { 'data-etq': c.texto, text: valor(x, c) }); })));
             if (estado.porCodigo[x.codigo]) tr.addEventListener('click', function () { abrirFicha(x.codigo); });
             return tr;
@@ -1374,10 +1619,10 @@
       excel.addEventListener('click', function () {
         ocupado(excel, true, 'Preparando…');
         cargarScript(XLSX_URL).then(function () {
-          var aoa = [['Fecha', 'Código', 'Cliente', 'Ruta', 'Vendedor/Chofer', 'Usuario'].concat(cols.map(function (c) { return c.texto; }))];
+          var aoa = [['Fecha', 'Código', 'Cliente', 'Tipo de cliente', 'Ruta', 'Vendedor/Chofer', 'Usuario'].concat(cols.map(function (c) { return c.texto; }))];
           filtradas().forEach(function (x) {
             var cli = estado.porCodigo[x.codigo] || {};
-            aoa.push([x.fecha, x.codigo, x.cliente, cli.ruta || '', cli.vendedor || '', x.usuario].concat(cols.map(function (c) {
+            aoa.push([x.fecha, x.codigo, x.cliente, tipoDe(x), cli.ruta || '', cli.vendedor || '', x.usuario].concat(cols.map(function (c) {
               var q = (x.respuestas || []).filter(function (a) { return a.id === c.id; })[0];
               if (!q || vacio(q.v)) return '';
               if (q.t === 'numero' || q.t === 'calificacion') return Number(q.v);
@@ -1385,7 +1630,7 @@
             })));
           });
           var ws = XLSX.utils.aoa_to_sheet(aoa);
-          ws['!cols'] = aoa[0].map(function (t, i) { return { wch: i < 6 ? [16, 12, 30, 10, 18, 14][i] : Math.min(40, Math.max(12, String(t).length)) }; });
+          ws['!cols'] = aoa[0].map(function (t, i) { return { wch: i < 7 ? [16, 12, 30, 16, 10, 18, 14][i] : Math.min(40, Math.max(12, String(t).length)) }; });
           var wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, 'Respuestas');
           var nombre = normalizar(f.titulo).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'formulario';
