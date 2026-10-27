@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="es" class="pa-locked">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0d3c7a">
+  <title>Contacto-Cliente</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/auth.css?v=5">
+  <link rel="stylesheet" href="assets/app.css?v=5">
+  <script src="assets/config.js?v=5"></script>
+  <script src="assets/auth.js?v=5" defer></script>
+  <script src="assets/app.js?v=5" defer></script>
+</head>
+<body>
+  <!--
+    Contacto-Cliente — plataforma de distribución.
+    Todo lo que hay en <body> solo se ve después de iniciar sesión.
+    Este archivo es público en GitHub: no escribas aquí datos de clientes.
+    Los datos llegan desde Apps Script con la sesión del usuario.
+  -->
+  <header class="cc-cabecera">
+    <div class="cc-marca">
+      <span class="cc-logo" aria-hidden="true">CC</span>
+      <div>
+        <strong>Contacto-Cliente</strong>
+        <small>Distribución · Planeta Azul</small>
+      </div>
+    </div>
+  </header>
+
+  <nav class="cc-nav" aria-label="Secciones">
+    <button type="button" data-vista="clientes" class="activo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3Zm8 1c-2.7 0-8 1.3-8 4v3h16v-3c0-2.7-5.3-4-8-4Zm-8 0c-.3 0-.7 0-1.1.1A4.7 4.7 0 0 1 9 17v3H1v-3c0-2.2 4.4-4 7-4Z"/></svg>
+      <span>Clientes</span>
+    </button>
+    <button type="button" data-vista="resumen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10h3v10Zm6.5 0V4h3v16ZM17 20v-7h3v7Z"/></svg>
+      <span>Resumen</span>
+    </button>
+    <button type="button" data-vista="cargar" data-pa-min-rol="editor" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 16V7.8l-3.6 3.6L6 10l6-6 6 6-1.4 1.4L13 7.8V16Zm-7 4v-5h2v3h12v-3h2v5Z"/></svg>
+      <span>Cargar</span>
+    </button>
+    <button type="button" data-vista="formularios" data-pa-permiso="responderFormularios" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm0 2v16h10V4Zm2 3h6v2H9Zm0 4h6v2H9Zm0 4h4v2H9Z"/></svg>
+      <span>Formularios</span>
+    </button>
+    <button type="button" data-vista="usuarios" data-pa-solo-admin hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-3.3 0-8 1.7-8 5v1h16v-1c0-3.3-4.7-5-8-5Z"/></svg>
+      <span>Usuarios</span>
+    </button>
+    <button type="button" data-vista="actividad" data-pa-permiso="verActividad" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7Zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8Z"/></svg>
+      <span>Actividad</span>
+    </button>
+  </nav>
+
+  <main class="cc-main">
+    <!-- ===================== CLIENTES ===================== -->
+    <section id="vista-clientes" class="cc-vista activa" aria-labelledby="t-clientes">
+      <h1 id="t-clientes" class="cc-oculto-visual">Clientes</h1>
+      <div class="cc-buscador">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4a6 6 0 1 0 3.7 10.7l4.3 4.3 1.4-1.4-4.3-4.3A6 6 0 0 0 10 4Zm0 2a4 4 0 1 1-4 4 4 4 0 0 1 4-4Z"/></svg>
+        <input id="cc-buscar" type="search" autocomplete="off" placeholder="Buscar por código, nombre, dirección o teléfono" aria-label="Buscar cliente">
+      </div>
+      <div class="cc-filtros">
+        <select id="cc-f-ruta" aria-label="Filtrar por ruta"><option value="">Todas las rutas</option></select>
+        <select id="cc-f-vendedor" aria-label="Filtrar por vendedor o chofer"><option value="">Todos los vendedores</option></select>
+        <select id="cc-f-sector" aria-label="Filtrar por sector"><option value="">Todos los sectores</option></select>
+        <select id="cc-f-tipo" aria-label="Filtrar por tipo de cliente"><option value="">Todos los tipos</option></select>
+        <select id="cc-f-audio" aria-label="Filtrar por nota de voz">
+          <option value="">Con y sin nota de voz</option>
+          <option value="1">Con nota de voz</option>
+          <option value="0">Sin nota de voz</option>
+        </select>
+        <select id="cc-f-oculto" aria-label="Clientes ocultos" data-pa-permiso="ocultarClientes" hidden>
+          <option value="vis">Solo visibles</option>
+          <option value="ocu">Solo ocultos</option>
+          <option value="todos">Visibles y ocultos</option>
+        </select>
+        <button type="button" id="cc-limpiar" class="pa-enlace">Limpiar</button>
+      </div>
+      <div class="cc-barra-lista">
+        <p id="cc-conteo" class="cc-conteo" aria-live="polite">Cargando clientes…</p>
+        <div class="cc-acciones-lista" data-pa-min-rol="editor" hidden>
+          <button type="button" id="cc-exportar" class="pa-btn pa-btn-sec pa-btn-sm">Descargar Excel</button>
+          <button type="button" id="cc-nuevo" class="pa-btn pa-btn-sm">+ Nuevo cliente</button>
+        </div>
+      </div>
+      <ul id="cc-lista" class="cc-lista"></ul>
+      <button type="button" id="cc-mas" class="pa-btn pa-btn-sec cc-mas" hidden>Mostrar más</button>
+    </section>
+
+    <!-- ===================== RESUMEN ===================== -->
+    <section id="vista-resumen" class="cc-vista" aria-labelledby="t-resumen" hidden>
+      <h1 id="t-resumen" class="cc-titulo">Resumen</h1>
+      <div id="cc-kpis" class="cc-kpis"></div>
+      <div class="cc-tarjeta">
+        <div class="cc-tarjeta-cab">
+          <h2>Cobertura de notas de voz</h2>
+          <div class="cc-segmentos" role="tablist" aria-label="Agrupar por">
+            <button type="button" role="tab" data-grupo="ruta" class="activo">Por ruta</button>
+            <button type="button" role="tab" data-grupo="vendedor">Por vendedor</button>
+            <button type="button" role="tab" data-grupo="sector">Por sector</button>
+            <button type="button" role="tab" data-grupo="tipo">Por tipo</button>
+          </div>
+        </div>
+        <p class="cc-suave">Toca una fila para ver sus clientes sin nota de voz.</p>
+        <div id="cc-cobertura" class="cc-tabla-cont"></div>
+      </div>
+    </section>
+
+    <!-- ===================== CARGAR (editores) ===================== -->
+    <section id="vista-cargar" class="cc-vista" aria-labelledby="t-cargar" hidden>
+      <h1 id="t-cargar" class="cc-titulo">Cargar datos</h1>
+
+      <div class="cc-tarjeta">
+        <h2>1. Importar clientes desde Excel o CSV</h2>
+        <p class="cc-suave">La primera fila debe tener los títulos. Se reconocen: Código, Nombre, Tipo de cliente, Dirección, Sector/Zona, Ruta, Vendedor/Chofer y Teléfono. Si un código ya existe, se actualizan sus datos; no se borra nada.</p>
+        <label class="cc-archivo">
+          <input id="cc-imp-archivo" type="file" accept=".xlsx,.xls,.csv,.txt">
+          <span>Elegir archivo de clientes</span>
+        </label>
+        <div id="cc-imp-zona"></div>
+      </div>
+
+      <div class="cc-tarjeta">
+        <h2>2. Subir notas de voz</h2>
+        <p class="cc-suave">Elige uno o varios audios. Si el nombre del archivo lleva el código del cliente (por ejemplo <code>C00123.mp3</code> o <code>00123 Juan Perez.ogg</code>), se asocian solos. Recomendado hasta 200 archivos por vez; para miles usa la opción 3.</p>
+        <label class="cc-archivo">
+          <input id="cc-aud-archivos" type="file" accept="audio/*,.opus,.ogg,.amr,.m4a" multiple>
+          <span>Elegir notas de voz</span>
+        </label>
+        <div id="cc-aud-zona"></div>
+      </div>
+
+      <div class="cc-tarjeta">
+        <h2>3. Sincronizar la carpeta de Drive (miles de audios)</h2>
+        <ol class="cc-pasos">
+          <li>Copia los audios <strong>directamente</strong> dentro de la carpeta de notas de voz en Google Drive, sin subcarpetas (con Google Drive para escritorio puedes arrastrar carpetas enteras). <span id="cc-carpeta-enlace"></span></li>
+          <li>Pulsa <strong>Sincronizar</strong>. La app revisa cada archivo y lo asocia al cliente cuyo código aparece en el nombre.</li>
+          <li>Los audios que no se puedan asociar aparecen abajo para asignarlos a mano.</li>
+        </ol>
+        <label class="cc-check" data-pa-permiso="reemplazarAudio" hidden><input id="cc-sinc-reemplazar" type="checkbox"> Reemplazar la nota de voz si el cliente ya tiene una</label>
+        <div class="pa-fila"><button type="button" id="cc-sinc" class="pa-btn">Sincronizar ahora</button></div>
+        <div id="cc-sinc-zona"></div>
+      </div>
+    </section>
+
+    <!-- ===================== FORMULARIOS (llenar: usuarios autorizados · respuestas: supervisor · diseñar: admin) ===================== -->
+    <section id="vista-formularios" class="cc-vista" aria-labelledby="t-formularios" hidden>
+      <h1 id="t-formularios" class="cc-titulo">Formularios</h1>
+      <div class="cc-tarjeta">
+        <div class="cc-tarjeta-cab">
+          <h2>Formularios de preguntas</h2>
+          <button type="button" id="cc-form-nuevo" class="pa-btn pa-btn-sm" data-pa-permiso="disenarFormularios" hidden>+ Nuevo formulario</button>
+        </div>
+        <p class="cc-suave">Pulsa <strong>Llenar</strong> y elige el cliente, o llénalo desde la ficha del cliente. Cada formulario puede ser solo para ciertos <strong>tipos de cliente</strong> y solo para ciertos <strong>roles</strong> (usuario, editor, supervisor o administrador). Cada respuesta queda guardada en el historial del cliente, con la fecha y el usuario.</p>
+        <div class="cc-filtros" id="cc-form-filtros" hidden>
+          <input id="cc-form-buscar" class="pa-input" type="search" placeholder="Buscar formulario…" aria-label="Buscar formulario">
+          <select id="cc-form-f-tipo" aria-label="Filtrar formularios por tipo de cliente"><option value="">Todos los tipos de cliente</option></select>
+        </div>
+        <div id="cc-form-lista"></div>
+      </div>
+    </section>
+
+    <!-- ===================== ACTIVIDAD (supervisor y admin) ===================== -->
+    <section id="vista-actividad" class="cc-vista" aria-labelledby="t-actividad" hidden>
+      <h1 id="t-actividad" class="cc-titulo">Actividad</h1>
+      <div class="cc-tarjeta">
+        <div class="pa-fila pa-entre">
+          <input id="cc-act-filtro" class="pa-input" type="search" placeholder="Filtrar por usuario, acción o cliente…">
+          <button type="button" id="cc-act-actualizar" class="pa-btn pa-btn-sec">Actualizar</button>
+        </div>
+        <p id="cc-act-info" class="cc-suave"></p>
+        <div id="cc-act-tabla" class="cc-tabla-cont"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="cc-pie">Contacto-Cliente · Acceso solo para personal autorizado</footer>
+</body>
+</html>
