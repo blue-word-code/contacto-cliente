@@ -4,7 +4,7 @@
  * Debe empezar con https://script.google.com/ y terminar en /exec
  */
 window.APP_CONFIG = {
-  apiUrl: 'https://script.google.com/macros/s/AKfycbwvVsEdGjpGVArNkZR3Bd8n_sFsN7tBrD928ZU_dujfKr_pOceKpKDDdK3Ep57xYq4TMA/exec',
+  apiUrl: '',
   nombreSistema: 'Contacto-Cliente',
   logo: 'CC'
 };
